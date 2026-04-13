@@ -145,8 +145,9 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
     final descController = TextEditingController();
     final priceController = TextEditingController();
     final qtyController = TextEditingController(text: '10');
+    final linkController = TextEditingController(); // Link controller
     final formKey = GlobalKey<FormState>();
-    XFile? selectedImage;
+    List<XFile> selectedImages = []; // Multiple images
     bool isUploading = false;
 
     showModalBottomSheet(
@@ -187,40 +188,77 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
                     ),
                     const SizedBox(height: 20),
                     
-                    // Image Picker
-                    Center(
-                      child: GestureDetector(
-                        onTap: () async {
-                          final picker = ImagePicker();
-                          final image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
-                          if (image != null) {
-                            setModalState(() => selectedImage = image);
-                          }
-                        },
-                        child: Container(
-                          width: double.infinity,
-                          height: 150,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF9FAFB),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.grey.shade300),
-                          ),
-                          child: selectedImage != null
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
+                    // Multiple Image Picker UI
+                    const Text('Dish Photos (up to 3)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 100,
+                      child: Row(
+                        children: [
+                          ...selectedImages.asMap().entries.map((entry) => Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Stack(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
                                   child: kIsWeb 
-                                    ? Image.network(selectedImage!.path, fit: BoxFit.cover)
-                                    : Image.file(File(selectedImage!.path), fit: BoxFit.cover),
-                                )
-                              : Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.add_a_photo, size: 40, color: Colors.grey.shade400),
-                                    const SizedBox(height: 8),
-                                    const Text('Add Dish Photo *', style: TextStyle(color: Color(0xFF94A3B8))),
-                                  ],
+                                    ? Image.network(entry.value.path, width: 80, height: 100, fit: BoxFit.cover)
+                                    : Image.file(File(entry.value.path), width: 80, height: 100, fit: BoxFit.cover),
                                 ),
-                        ),
+                                Positioned(
+                                  top: 2, right: 2,
+                                  child: GestureDetector(
+                                    onTap: () => setModalState(() => selectedImages.removeAt(entry.key)),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(2),
+                                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                                      child: const Icon(Icons.close, size: 12, color: Colors.white),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )),
+                          if (selectedImages.length < 3)
+                            GestureDetector(
+                              onTap: () async {
+                                final picker = ImagePicker();
+                                final picked = await picker.pickMultiImage(imageQuality: 70);
+                                if (picked.isNotEmpty) {
+                                  setModalState(() {
+                                    final remaining = 3 - selectedImages.length;
+                                    selectedImages.addAll(picked.take(remaining));
+                                  });
+                                }
+                              },
+                              child: Container(
+                                width: 80, height: 100,
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.grey.shade300, style: BorderStyle.solid),
+                                ),
+                                child: const Icon(Icons.add_a_photo, color: Colors.grey),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    
+                    const SizedBox(height: 12),
+                    const Center(child: Text('OR', style: TextStyle(fontSize: 12, color: Colors.grey))),
+                    const SizedBox(height: 12),
+
+                    // Photo Link Input
+                    TextFormField(
+                      controller: linkController,
+                      decoration: InputDecoration(
+                        labelText: 'Paste Photo URL (Optional)',
+                        hintText: 'https://example.com/photo.jpg',
+                        prefixIcon: const Icon(Icons.link),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        filled: true,
+                        fillColor: const Color(0xFFF9FAFB),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -284,34 +322,39 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
                       child: ElevatedButton(
                         onPressed: isUploading ? null : () async {
                           if (!formKey.currentState!.validate()) return;
-                          if (selectedImage == null) {
+                          
+                          final link = linkController.text.trim();
+                          if (selectedImages.isEmpty && link.isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Please select a photo')),
+                              const SnackBar(content: Text('Add a photo or a link')),
                             );
                             return;
                           }
+                          
                           if (_cookId == null) return;
 
                           setModalState(() => isUploading = true);
 
                           try {
-                            final timestamp = DateTime.now().millisecondsSinceEpoch;
-                            final path = '$_cookId/daily/dish_$timestamp.jpg';
-                            final bytes = await selectedImage!.readAsBytes();
+                            final List<String> imageUrls = [];
                             
-                            await SupabaseConfig.client.storage
-                                .from('kitchen-photos')
-                                .uploadBinary(path, bytes);
-
-                            final imageUrl = SupabaseConfig.client.storage
-                                .from('kitchen-photos')
-                                .getPublicUrl(path);
+                            // Upload local images
+                            for (var img in selectedImages) {
+                              final timestamp = DateTime.now().millisecondsSinceEpoch;
+                              final path = '$_cookId/daily/dish_${timestamp}.jpg';
+                              final bytes = await img.readAsBytes();
+                              await SupabaseConfig.client.storage.from('kitchen-photos').uploadBinary(path, bytes);
+                              imageUrls.add(SupabaseConfig.client.storage.from('kitchen-photos').getPublicUrl(path));
+                            }
+                            
+                            // Add manual link
+                            if (link.isNotEmpty) imageUrls.add(link);
 
                             final item = DailyMenuItem(
                               id: '',
                               name: nameController.text.trim(),
                               description: descController.text.trim(),
-                              imageUrl: imageUrl,
+                              imageUrl: imageUrls.first, // Main image
                               category: category,
                               price: double.parse(priceController.text.trim()),
                               quantity: int.tryParse(qtyController.text.trim()) ?? 10,
@@ -338,7 +381,7 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         child: isUploading 
-                          ? const CircularProgressIndicator(color: Colors.white)
+                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                           : Text(
                               category == MealCategory.special ? 'Add Special' : 'Add Dish',
                               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -565,8 +608,25 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
   }
 
   Widget _buildMenuContent() {
-    if (_currentMenu == null) {
-      return const Center(child: Text('No menu available'));
+    if (_currentMenu == null || _currentMenu!.items.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.restaurant_menu, size: 64, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text(
+              'No menu items for this date',
+              style: TextStyle(fontSize: 16, color: Colors.grey.shade500, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Tap "Add Dish" to get started',
+              style: TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+          ],
+        ),
+      );
     }
 
     return SingleChildScrollView(

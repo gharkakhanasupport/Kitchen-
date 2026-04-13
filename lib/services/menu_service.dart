@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../models/menu_item.dart';
 import '../utils/supabase_config.dart';
 import 'sync_service.dart';
+import 'daily_menu_service.dart';
 
 /// Service class for managing menu items.
 /// All operations are persisted to Supabase and synced to User DB.
@@ -74,6 +75,24 @@ class MenuService {
     }
   }
 
+  /// Emergency method to remove the stuck Chicken dish
+  Future<void> removeStuckChicken() async {
+    try {
+      final data = await SupabaseConfig.client
+          .from(_table)
+          .select('id')
+          .eq('name', 'Chicken')
+          .eq('price', 50)
+          .maybeSingle();
+
+      if (data != null) {
+        await deleteMenuItem(data['id']);
+      }
+    } catch (e) {
+      debugPrint('Error removing stuck chicken: $e');
+    }
+  }
+
   /// Toggle item availability (synced to both DBs)
   Future<bool> toggleItemAvailability(String itemId) async {
     try {
@@ -128,5 +147,10 @@ class MenuService {
       debugPrint('MenuService.getAvailableMenuItems error: $e');
       return [];
     }
+  }
+
+  /// Auto-cleanup old daily menus (older than 3 days) from both DBs.
+  Future<void> cleanupOldDailyMenus() async {
+    await DailyMenuService().cleanupOldMenus();
   }
 }

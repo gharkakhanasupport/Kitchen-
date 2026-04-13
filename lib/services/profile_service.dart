@@ -79,6 +79,10 @@ class ProfileService {
         final cook = Cook.fromMap(result);
         await _saveToCache(cook);
         debugPrint('ProfileService: Refreshed profile. profileImageUrl=${cook.profileImageUrl}');
+        
+        // IMPORTANT: Also update _currentCook manually to be sure
+        _currentCook = cook;
+        
         return cook;
       }
     } catch (e) {
@@ -197,13 +201,20 @@ class ProfileService {
       if (profileImageUrl != null) cooksUpdate['profile_image_url'] = profileImageUrl;
       if (isVegetarian != null) cooksUpdate['is_vegetarian'] = isVegetarian;
 
-      // 1. Update cooks table in Kitchen DB
+      // 1. Update cooks table in Kitchen DB (try by id first, fallback to phone)
       if (cooksUpdate.isNotEmpty) {
         try {
-          await SupabaseConfig.client
-              .from('cooks')
-              .update(cooksUpdate)
-              .eq('phone', updatedCook.phoneNumber);
+          if (updatedCook.id.isNotEmpty) {
+            await SupabaseConfig.client
+                .from('cooks')
+                .update(cooksUpdate)
+                .eq('id', updatedCook.id);
+          } else {
+            await SupabaseConfig.client
+                .from('cooks')
+                .update(cooksUpdate)
+                .eq('phone', updatedCook.phoneNumber);
+          }
           debugPrint('ProfileService: cooks table updated OK');
         } catch (e) {
           debugPrint('ProfileService: cooks table update failed: $e');
@@ -248,6 +259,11 @@ class ProfileService {
   /// Call this after admin approves a kitchen application.
   Future<void> createKitchenEntry(Cook cook) async {
     await _syncToKitchensTable(cook);
+  }
+
+  /// Clear in-memory cache so next read picks up fresh data
+  void clearCache() {
+    _currentCook = null;
   }
 
   /// Clear profile data

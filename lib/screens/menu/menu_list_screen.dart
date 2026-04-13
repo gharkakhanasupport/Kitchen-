@@ -27,6 +27,7 @@ class _MenuListScreenState extends State<MenuListScreen> {
   @override
   void initState() {
     super.initState();
+    _menuService.removeStuckChicken(); // Emergency Cleanup
     _loadMenuItems();
   }
 

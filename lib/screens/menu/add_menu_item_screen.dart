@@ -27,10 +27,12 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
 
   final _menuService = MenuService();
 
+  final _imageLinkController = TextEditingController();
+
   String _selectedCategory = 'Lunch';
   bool _isLoading = false;
   int _quantity = 1;
-  File? _selectedImage;
+  List<File> _selectedImages = [];
   String? _uploadedImageUrl;
 
   @override
@@ -39,6 +41,7 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
     _descriptionController.dispose();
     _priceController.dispose();
     _quantityController.dispose();
+    _imageLinkController.dispose();
     super.dispose();
   }
 
@@ -62,48 +65,55 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
     return null;
   }
 
-  Future<void> _pickImage() async {
+  Future<void> _pickImages() async {
+    if (_selectedImages.length >= 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Maximum 3 photos allowed'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
     final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
+    final picked = await picker.pickMultiImage(
       maxWidth: 1024,
       maxHeight: 1024,
       imageQuality: 80,
     );
-    if (picked != null) {
-      setState(() => _selectedImage = File(picked.path));
+    if (picked.isNotEmpty) {
+      final remaining = 3 - _selectedImages.length;
+      final toAdd = picked.take(remaining).map((x) => File(x.path)).toList();
+      setState(() => _selectedImages.addAll(toAdd));
     }
   }
 
-  Future<String?> _uploadImage() async {
-    if (_selectedImage == null) return null;
+  void _removeImage(int index) {
+    setState(() => _selectedImages.removeAt(index));
+  }
 
+  Future<String?> _uploadSingleImage(File file, int index) async {
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final path = '${widget.cookId}/dishes/dish_$timestamp.jpg';
+      final path = '${widget.cookId}/dishes/dish_${timestamp}_$index.jpg';
 
       await SupabaseConfig.client.storage
           .from('kitchen-photos')
-          .upload(path, _selectedImage!);
+          .upload(path, file, fileOptions: const FileOptions(upsert: true));
 
-      final url = SupabaseConfig.client.storage
+      return SupabaseConfig.client.storage
           .from('kitchen-photos')
           .getPublicUrl(path);
-
-      return url;
     } catch (e) {
-      debugPrint('Image upload error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Photo upload failed: $e'),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
+      debugPrint('Image upload error ($index): $e');
       return null;
     }
+  }
+
+  Future<List<String>> _uploadImages() async {
+    List<String> urls = [];
+    for (int i = 0; i < _selectedImages.length; i++) {
+      final url = await _uploadSingleImage(_selectedImages[i], i);
+      if (url != null) urls.add(url);
+    }
+    return urls;
   }
 
   Future<void> _addMenuItem() async {
@@ -111,10 +121,11 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
       return;
     }
 
-    if (_selectedImage == null) {
+    final imageLink = _imageLinkController.text.trim();
+    if (_selectedImages.isEmpty && imageLink.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please upload a photo of the dish'),
+          content: Text('Please add at least one photo or image link'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -126,11 +137,21 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
     });
 
     try {
-      // Upload image (mandatory now)
-      final imageUrl = await _uploadImage();
+      final List<String> imageUrls = [];
       
-      if (imageUrl == null) {
-        throw Exception('Failed to upload image. Please try again.');
+      // Upload local images
+      if (_selectedImages.isNotEmpty) {
+        final uploadedUrls = await _uploadImages();
+        imageUrls.addAll(uploadedUrls);
+      }
+      
+      // Add manual link if provided
+      if (imageLink.isNotEmpty) {
+        imageUrls.add(imageLink);
+      }
+
+      if (imageUrls.isEmpty) {
+        throw Exception('Failed to process any images. Please try again.');
       }
 
       // Create a MenuItem object
@@ -142,7 +163,7 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
         price: double.parse(_priceController.text),
         quantityAvailable: _quantity,
         category: _selectedCategory,
-        imageUrl: imageUrl,
+        imageUrls: imageUrls,
         createdAt: DateTime.now(),
       );
 
@@ -232,81 +253,100 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
                 children: [
                   const SizedBox(height: 16),
 
-                  // Image Upload Section
+                  // Image Upload Section — up to 3 photos
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: GestureDetector(
-                      onTap: _pickImage,
-                      child: Container(
-                        height: 200,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: const Color(0xFFE5E7EB),
-                            width: 2,
-                            style: BorderStyle.solid,
-                          ),
-                          image: _selectedImage != null
-                              ? DecorationImage(
-                                  image: FileImage(_selectedImage!),
-                                  fit: BoxFit.cover,
-                                )
-                              : null,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Dish Photos (up to 3)',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2d3436)),
                         ),
-                        child: _selectedImage == null
-                            ? Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Container(
-                                    width: 64,
-                                    height: 64,
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary.withValues(alpha: 0.1),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Icon(
-                                      Icons.add_photo_alternate,
-                                      size: 32,
-                                      color: AppColors.primary,
-                                    ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          height: 120,
+                          child: Row(
+                            children: [
+                              // Selected images
+                              ..._selectedImages.asMap().entries.map((entry) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: Stack(
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: Image.file(entry.value, width: 100, height: 120, fit: BoxFit.cover),
+                                      ),
+                                      Positioned(
+                                        top: 4, right: 4,
+                                        child: GestureDetector(
+                                          onTap: () => _removeImage(entry.key),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(4),
+                                            decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                                            child: const Icon(Icons.close, size: 14, color: Colors.white),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    'Add Dish Photo',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.primary,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  const Text(
-                                    'Tap to upload image',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: Color(0xFF636e72),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : Align(
-                                alignment: Alignment.topRight,
-                                child: Padding(
-                                  padding: const EdgeInsets.all(8),
+                                );
+                              }),
+                              // Add button (if < 3 photos)
+                              if (_selectedImages.length < 3)
+                                GestureDetector(
+                                  onTap: _pickImages,
                                   child: Container(
-                                    decoration: const BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
+                                    width: 100, height: 120,
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primary.withValues(alpha: 0.08),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: AppColors.primary.withValues(alpha: 0.3), width: 2),
                                     ),
-                                    child: IconButton(
-                                      icon: const Icon(Icons.edit, size: 20),
-                                      onPressed: _pickImage,
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.add_photo_alternate, size: 28, color: AppColors.primary),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _selectedImages.isEmpty ? 'Add Photos' : 'Add More',
+                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
-                              ),
-                      ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        // OR divider
+                        Row(
+                          children: [
+                            Expanded(child: Divider(color: Colors.grey.shade300)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              child: Text('OR paste image link', style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                            ),
+                            Expanded(child: Divider(color: Colors.grey.shade300)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        // Image URL input
+                        TextFormField(
+                          controller: _imageLinkController,
+                          decoration: InputDecoration(
+                            hintText: 'https://example.com/dish-photo.jpg',
+                            prefixIcon: const Icon(Icons.link, size: 20),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                            filled: true,
+                            fillColor: const Color(0xFFF9FAFB),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          ),
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 24),

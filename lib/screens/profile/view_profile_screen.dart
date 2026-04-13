@@ -59,13 +59,34 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
     });
   }
 
+  Future<void> _ensureStorageBucket() async {
+    try {
+      // Try to list files — if bucket doesn't exist, this will throw
+      await SupabaseConfig.client.storage.from('kitchen-photos').list(path: '');
+    } catch (e) {
+      debugPrint('Bucket check failed, trying to create: $e');
+      try {
+        await SupabaseConfig.client.storage.createBucket(
+          'kitchen-photos',
+          const BucketOptions(public: true),
+        );
+        debugPrint('Created kitchen-photos bucket');
+      } catch (createErr) {
+        // Bucket might already exist, or we don't have permission
+        debugPrint('Bucket create result: $createErr');
+      }
+    }
+  }
+
   Future<void> _pickAndUploadLogo() async {
     if (_cook == null) return;
 
     final picker = ImagePicker();
     final image = await picker.pickImage(
       source: ImageSource.gallery,
-      imageQuality: 70,
+      maxWidth: 512,
+      maxHeight: 512,
+      imageQuality: 80,
     );
 
     if (image == null) return;
@@ -75,42 +96,45 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
     });
 
     try {
+      // Ensure bucket exists
+      await _ensureStorageBucket();
+
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final path = '${_cook!.id}/logo/kitchen_logo_$timestamp.jpg';
       final bytes = await image.readAsBytes();
 
-      debugPrint('Uploading logo to storage: path=$path, bytes=${bytes.length}');
+      debugPrint('Uploading logo: path=$path, size=${bytes.length} bytes');
 
-      // Use upsert to handle re-uploads gracefully
+      // Upload to Supabase Storage
       await SupabaseConfig.client.storage
           .from('kitchen-photos')
           .uploadBinary(
             path,
             bytes,
-            fileOptions: const FileOptions(upsert: true),
+            fileOptions: const FileOptions(
+              upsert: true,
+              contentType: 'image/jpeg',
+            ),
           );
 
       final url = SupabaseConfig.client.storage
           .from('kitchen-photos')
           .getPublicUrl(path);
-      
-      debugPrint('Generated Logo URL: $url');
 
-      // Update profile in cooks table + sync to both kitchens tables
+      debugPrint('Logo uploaded. Public URL: $url');
+
+      // Update profile — this saves to cooks table + syncs to kitchens in both DBs
       final success = await _profileService.updateProfile(profileImageUrl: url);
-      
+
       if (success) {
-        // Get updated profile from local cache (already saved by updateProfile)
-        // Don't call refreshProfile() here — it would re-query DB and may get
-        // stale data before the write propagates.
-        final updatedProfile = await _profileService.getCurrentProfile();
+        // Update local state directly — don't re-query DB as it may not have propagated yet
         if (mounted) {
           setState(() {
-            _cook = updatedProfile;
+            _cook = _cook!.copyWith(profileImageUrl: url);
           });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Logo updated successfully!'),
+              content: Text('Kitchen logo updated!'),
               backgroundColor: secondaryColor,
             ),
           );
@@ -119,7 +143,7 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Failed to update profile. Please try again.'),
+              content: Text('Failed to save logo to profile. Try again.'),
               backgroundColor: Colors.red,
             ),
           );
@@ -129,7 +153,11 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
       debugPrint('Error in _pickAndUploadLogo: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error uploading logo: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Upload error: ${e.toString().length > 80 ? '${e.toString().substring(0, 80)}...' : e}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     } finally {
@@ -658,7 +686,7 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
                           duration: const Duration(seconds: 2),
                           builder: (context, value, child) {
                             return Text(
-                              '$value+',
+                              '$value',
                               style: const TextStyle(
                                 fontSize: 32,
                                 fontWeight: FontWeight.w800,
@@ -680,7 +708,7 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
                           duration: const Duration(seconds: 2),
                           builder: (context, value, child) {
                             return Text(
-                              '\$$value',
+                              '₹$value',
                               style: const TextStyle(
                                 fontSize: 32,
                                 fontWeight: FontWeight.w800,

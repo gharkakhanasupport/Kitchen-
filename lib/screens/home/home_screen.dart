@@ -57,6 +57,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Sync profile to kitchens table
       await _profileService.refreshProfile();
+
+      // Auto-cleanup: delete daily menus older than 3 days
+      await _menuService.cleanupOldDailyMenus();
     }
 
     setState(() {

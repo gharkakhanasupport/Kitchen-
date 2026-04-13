@@ -128,6 +128,36 @@ class DailyMenuService {
     }
   }
 
+  /// Auto-cleanup: delete daily menus older than 3 days from both DBs.
+  /// Call this on app startup to save storage.
+  Future<void> cleanupOldMenus() async {
+    try {
+      final cutoff = DateTime.now().subtract(const Duration(days: 3));
+      final cutoffStr = _getDateKey(cutoff);
+      debugPrint('DailyMenuService: cleaning up menus older than $cutoffStr');
+
+      // Delete from Kitchen DB
+      await SupabaseConfig.client
+          .from(_table)
+          .delete()
+          .lt('date', cutoffStr);
+
+      // Delete from User DB
+      try {
+        await SupabaseConfig.userDbClient
+            .from(_table)
+            .delete()
+            .lt('date', cutoffStr);
+      } catch (e) {
+        debugPrint('DailyMenuService: User DB cleanup failed: $e');
+      }
+
+      debugPrint('DailyMenuService: old menus cleaned up');
+    } catch (e) {
+      debugPrint('DailyMenuService.cleanupOldMenus error: $e');
+    }
+  }
+
   /// Get date key in YYYY-MM-DD format
   String _getDateKey(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';

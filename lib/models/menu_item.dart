@@ -8,7 +8,7 @@ class MenuItem {
   final double price;
   final int quantityAvailable;
   final String category; // e.g., "Breakfast", "Lunch", "Dinner", "Snacks"
-  final String? imageUrl;
+  final List<String> imageUrls;
   final bool isAvailable;
   final DateTime createdAt;
 
@@ -20,13 +20,23 @@ class MenuItem {
     required this.price,
     required this.quantityAvailable,
     required this.category,
-    this.imageUrl,
+    this.imageUrls = const [],
     this.isAvailable = true,
     required this.createdAt,
   });
 
+  /// Get the primary image for display
+  String? get displayImage => imageUrls.isNotEmpty ? imageUrls.first : null;
+
   /// Create a MenuItem from Supabase row (snake_case keys)
   factory MenuItem.fromMap(Map<String, dynamic> map) {
+    List<String> images = [];
+    if (map['image_urls'] is List) {
+      images = List<String>.from(map['image_urls']);
+    } else if (map['image_url'] != null) {
+      images = [map['image_url'].toString()];
+    }
+
     return MenuItem(
       id: (map['id'] ?? '').toString(),
       cookId: map['cook_id'] ?? map['cookId'] ?? '',
@@ -35,7 +45,7 @@ class MenuItem {
       price: (map['price'] ?? 0).toDouble(),
       quantityAvailable: map['quantity_available'] ?? map['quantityAvailable'] ?? 0,
       category: map['category'] ?? '',
-      imageUrl: map['image_url'] ?? map['imageUrl'],
+      imageUrls: images,
       isAvailable: map['is_available'] ?? map['isAvailable'] ?? true,
       createdAt: DateTime.parse(
         map['created_at'] ?? map['createdAt'] ?? DateTime.now().toIso8601String(),
@@ -52,7 +62,8 @@ class MenuItem {
       'price': price,
       'quantity_available': quantityAvailable,
       'category': category,
-      'image_url': imageUrl,
+      'image_urls': imageUrls,
+      'image_url': displayImage, // Legacy support
       'is_available': isAvailable,
       'created_at': createdAt.toIso8601String(),
     };
@@ -86,7 +97,7 @@ class MenuItem {
     double? price,
     int? quantityAvailable,
     String? category,
-    String? imageUrl,
+    List<String>? imageUrls,
     bool? isAvailable,
     DateTime? createdAt,
   }) {
@@ -98,7 +109,7 @@ class MenuItem {
       price: price ?? this.price,
       quantityAvailable: quantityAvailable ?? this.quantityAvailable,
       category: category ?? this.category,
-      imageUrl: imageUrl ?? this.imageUrl,
+      imageUrls: imageUrls ?? this.imageUrls,
       isAvailable: isAvailable ?? this.isAvailable,
       createdAt: createdAt ?? this.createdAt,
     );
