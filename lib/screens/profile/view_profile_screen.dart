@@ -6,6 +6,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/cook.dart';
 import '../../services/auth_service.dart';
 import '../../services/profile_service.dart';
+import '../../services/earnings_service.dart';
+import '../../services/wallet_service.dart';
+import '../../services/order_service.dart';
 import '../../utils/supabase_config.dart';
 
 import '../auth/phone_login_screen.dart';
@@ -40,10 +43,30 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
   static const Color textSub = Color(0xFF877d64);
   static const Color borderLight = Color(0xFFe5e2dc);
 
+  final _walletService = KitchenWalletService();
+  final _earningsService = EarningsService();
+  double _realBalance = 0.0;
+  int _completedOrders = 0;
+
   @override
   void initState() {
     super.initState();
     _loadProfile();
+    _loadRealStats();
+  }
+
+  Future<void> _loadRealStats() async {
+    final cook = await _profileService.getCurrentProfile();
+    if (cook != null) {
+      final balance = await _walletService.getTotalEarnings(cook.id);
+      final orders = await _earningsService.getTodayEarnings(cook.id);
+      if (mounted) {
+        setState(() {
+          _realBalance = balance;
+          _completedOrders = orders.totalOrders;
+        });
+      }
+    }
   }
 
   Future<void> _loadProfile() async {
@@ -246,6 +269,44 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<void> _clearAllOrders() async {
+    if (_cook == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear All Orders?'),
+        content: const Text(
+          'This will permanently delete every order on your kitchen. This cannot be undone. Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+            child: const Text('Delete Forever'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final count = await OrderService().clearAllCookOrders(_cook!.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cleared $count orders.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed: $e')),
+      );
     }
   }
 
@@ -682,7 +743,7 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
                       child: _buildStatCard(
                         Icons.receipt_long,
                         TweenAnimationBuilder<int>(
-                          tween: IntTween(begin: 0, end: _cook!.totalOrders),
+                          tween: IntTween(begin: 0, end: _completedOrders),
                           duration: const Duration(seconds: 2),
                           builder: (context, value, child) {
                             return Text(
@@ -703,12 +764,12 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
                     Expanded(
                       child: _buildStatCard(
                         Icons.payments,
-                        TweenAnimationBuilder<int>(
-                          tween: IntTween(begin: 0, end: _cook!.earnings),
+                        TweenAnimationBuilder<double>(
+                          tween: Tween<double>(begin: 0, end: _realBalance),
                           duration: const Duration(seconds: 2),
                           builder: (context, value, child) {
                             return Text(
-                              '₹$value',
+                              '₹${value.toStringAsFixed(0)}',
                               style: const TextStyle(
                                 fontSize: 32,
                                 fontWeight: FontWeight.w800,
@@ -896,6 +957,52 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
                           _cook!.address,
                         ),
                       ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Danger Zone — clear test data
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF5F5),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.red.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.warning_amber, color: Colors.red.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Text('Danger Zone',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          color: Colors.red.shade700,
+                        )),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Delete every order on this kitchen. Cannot be undone.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _clearAllOrders,
+                      icon: const Icon(Icons.delete_forever),
+                      label: const Text('Clear All Orders'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red.shade700,
+                        side: BorderSide(color: Colors.red.shade700),
+                      ),
                     ),
                   ),
                 ],

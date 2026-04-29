@@ -1,107 +1,132 @@
+import 'package:flutter/foundation.dart';
 import '../models/token_user.dart';
+import '../utils/supabase_config.dart';
+import 'profile_service.dart';
 
 /// Token User Service
-/// Manages regular user data
+/// Derives customer list from the `orders` table — any customer who has
+/// placed at least one order with the current cook is a "token user".
 class TokenUserService {
-  // Demo users
-  final List<TokenUser> _demoUsers = [
-    TokenUser(
-      id: 'user_001',
-      name: 'Rajesh Kumar',
-      email: 'rajesh.kumar@example.com',
-      phoneNumber: '+91 98765 43210',
-      address: '123 MG Road, Bangalore, Karnataka 560001',
-      profileImage:
-          'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400',
-      totalOrders: 45,
-      joinedDate: DateTime(2023, 6, 15),
-      isActive: true,
-    ),
-    TokenUser(
-      id: 'user_002',
-      name: 'Priya Sharma',
-      email: 'priya.sharma@example.com',
-      phoneNumber: '+91 98765 43211',
-      address: '456 Brigade Road, Bangalore, Karnataka 560025',
-      profileImage:
-          'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400',
-      totalOrders: 32,
-      joinedDate: DateTime(2023, 7, 20),
-      isActive: true,
-    ),
-    TokenUser(
-      id: 'user_003',
-      name: 'Amit Patel',
-      email: 'amit.patel@example.com',
-      phoneNumber: '+91 98765 43212',
-      address: '789 Indiranagar, Bangalore, Karnataka 560038',
-      profileImage:
-          'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400',
-      totalOrders: 28,
-      joinedDate: DateTime(2023, 8, 10),
-      isActive: true,
-    ),
-    TokenUser(
-      id: 'user_004',
-      name: 'Sneha Reddy',
-      email: 'sneha.reddy@example.com',
-      phoneNumber: '+91 98765 43213',
-      address: '321 Koramangala, Bangalore, Karnataka 560034',
-      profileImage:
-          'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400',
-      totalOrders: 51,
-      joinedDate: DateTime(2023, 5, 5),
-      isActive: true,
-    ),
-    TokenUser(
-      id: 'user_005',
-      name: 'Vikram Singh',
-      email: 'vikram.singh@example.com',
-      phoneNumber: '+91 98765 43214',
-      address: '654 Whitefield, Bangalore, Karnataka 560066',
-      profileImage:
-          'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=400',
-      totalOrders: 19,
-      joinedDate: DateTime(2023, 9, 12),
-      isActive: false,
-    ),
-    TokenUser(
-      id: 'user_006',
-      name: 'Ananya Iyer',
-      email: 'ananya.iyer@example.com',
-      phoneNumber: '+91 98765 43215',
-      address: '987 Jayanagar, Bangalore, Karnataka 560041',
-      profileImage:
-          'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400',
-      totalOrders: 37,
-      joinedDate: DateTime(2023, 7, 8),
-      isActive: true,
-    ),
-  ];
+  final _profileService = ProfileService();
 
-  /// Get all token users
+  // Cache of derived users for sync getters
+  List<TokenUser> _cache = [];
+
+  /// Get all users (customers who have ordered from this cook)
   Future<List<TokenUser>> getTokenUsers() async {
-    await Future.delayed(const Duration(milliseconds: 300));
-    return _demoUsers;
+    try {
+      final cook = await _profileService.getCurrentProfile();
+      if (cook == null) {
+        debugPrint('TokenUserService: no cook profile — returning empty');
+        _cache = [];
+        return _cache;
+      }
+
+      // Pull all orders for this cook
+      final data = await SupabaseConfig.client
+          .from('orders')
+          .select()
+          .eq('cook_id', cook.id)
+          .order('created_at', ascending: false);
+
+      // Group by customer_id → aggregate counts and dates
+      final Map<String, _CustomerAgg> byCustomer = {};
+      for (final row in data) {
+        final customerId = (row['customer_id'] ?? '').toString();
+        if (customerId.isEmpty) continue;
+
+        final createdAt = DateTime.tryParse(row['created_at'] ?? '') ?? DateTime.now();
+        final status = (row['status'] ?? '').toString();
+
+        final agg = byCustomer.putIfAbsent(
+          customerId,
+          () => _CustomerAgg(
+            id: customerId,
+            name: (row['customer_name'] ?? 'Customer').toString(),
+            phone: (row['customer_phone'] ?? '').toString(),
+            address: (row['delivery_address'] ?? '').toString(),
+            firstOrderAt: createdAt,
+            lastOrderAt: createdAt,
+          ),
+        );
+
+        agg.totalOrders++;
+        if (createdAt.isBefore(agg.firstOrderAt)) agg.firstOrderAt = createdAt;
+        if (createdAt.isAfter(agg.lastOrderAt)) agg.lastOrderAt = createdAt;
+        // Any non-terminal order means active customer
+        if (status != 'rejected' && status != 'cancelled') {
+          agg.hasRecentActivity = true;
+        }
+      }
+
+      final users = byCustomer.values.map((a) {
+        // Active if they ordered within the last 30 days
+        final isActive = a.hasRecentActivity &&
+            DateTime.now().difference(a.lastOrderAt).inDays <= 30;
+
+        return TokenUser(
+          id: a.id,
+          name: a.name,
+          email: '', // not captured at order time
+          phoneNumber: a.phone,
+          address: a.address,
+          profileImage: '', // no customer photo yet
+          totalOrders: a.totalOrders,
+          joinedDate: a.firstOrderAt,
+          isActive: isActive,
+        );
+      }).toList();
+
+      // Sort by total orders desc
+      users.sort((a, b) => b.totalOrders.compareTo(a.totalOrders));
+
+      _cache = users;
+      debugPrint('TokenUserService: loaded ${_cache.length} customers from orders');
+      return _cache;
+    } catch (e) {
+      debugPrint('TokenUserService.getTokenUsers error: $e');
+      return _cache;
+    }
   }
 
-  /// Get active users count
+  /// Get active users count (synchronous — uses cache)
   int getActiveUsersCount() {
-    return _demoUsers.where((user) => user.isActive).length;
+    return _cache.where((user) => user.isActive).length;
   }
 
   /// Get user by ID
   Future<TokenUser?> getUserById(String id) async {
-    await Future.delayed(const Duration(milliseconds: 200));
+    if (_cache.isEmpty) await getTokenUsers();
     try {
-      return _demoUsers.firstWhere((user) => user.id == id);
+      return _cache.firstWhere((user) => user.id == id);
     } catch (e) {
       return null;
     }
   }
 
-  /// Get total users count
+  /// Get total users count (synchronous — uses cache)
   int getTotalUsersCount() {
-    return _demoUsers.length;
+    return _cache.length;
   }
+}
+
+/// Private aggregation helper
+class _CustomerAgg {
+  final String id;
+  final String name;
+  final String phone;
+  final String address;
+  DateTime firstOrderAt;
+  DateTime lastOrderAt;
+  int totalOrders = 0;
+  bool hasRecentActivity = false;
+
+  _CustomerAgg({
+    required this.id,
+    required this.name,
+    required this.phone,
+    required this.address,
+    required this.firstOrderAt,
+    required this.lastOrderAt,
+  });
 }

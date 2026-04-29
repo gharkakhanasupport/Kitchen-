@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'utils/constants.dart';
+import 'utils/firebase_options.dart';
 import 'utils/supabase_config.dart';
 import 'services/auth_service.dart';
+import 'services/daily_menu_service.dart';
+import 'services/fcm_service.dart';
 import 'screens/auth/welcome_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/splash/splash_screen.dart';
@@ -13,11 +19,50 @@ Future<void> main() async {
   // Ensure Flutter is initialized
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Supabase
-  await Supabase.initialize(
-    url: SupabaseConfig.url,
-    anonKey: SupabaseConfig.anonKey,
-  );
+  // Load environment variables
+  bool envLoaded = false;
+  try {
+    await dotenv.load(fileName: '.env');
+    envLoaded = true;
+    debugPrint('✅ Kitchen .env loaded');
+  } catch (e) {
+    debugPrint('⚠️ Kitchen .env load failed: $e (using fallback values)');
+  }
+
+  // Initialize Supabase with hardcoded fallbacks for web reliability
+  const fallbackUrl = 'https://yvbjnuobnxekgibfqsmq.supabase.co';
+  const fallbackAnonKey =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl2YmpudW9ibnhla2dpYmZxc21xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzOTY1NzIsImV4cCI6MjA5MDk3MjU3Mn0.Hf5zPb8urWQq155fUxF7kQIGFb0NyWphdMyeRI83vgk';
+
+  final supabaseUrl = envLoaded
+      ? (dotenv.env['SUPABASE_URL'] ?? fallbackUrl)
+      : fallbackUrl;
+  final supabaseAnonKey = envLoaded
+      ? (dotenv.env['SUPABASE_ANON_KEY'] ?? fallbackAnonKey)
+      : fallbackAnonKey;
+
+  try {
+    await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+    debugPrint('✅ Supabase initialized');
+  } catch (e) {
+    debugPrint('❌ Supabase init failed: $e');
+  }
+
+  // Initialize Firebase for push notifications
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    debugPrint('✅ Firebase initialized');
+  } catch (e) {
+    debugPrint('⚠️ Firebase init failed: $e');
+  }
+
+  // Initialize FCM push notifications (non-blocking)
+  FCMService().initialize();
+
+  // Auto-cleanup menus older than 3 days (fire-and-forget)
+  DailyMenuService().cleanupOldMenus();
 
   // Set preferred orientations (portrait only for better UX)
   SystemChrome.setPreferredOrientations([

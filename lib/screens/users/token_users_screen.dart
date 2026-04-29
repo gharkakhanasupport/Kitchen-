@@ -16,7 +16,9 @@ class TokenUsersScreen extends StatefulWidget {
 class _TokenUsersScreenState extends State<TokenUsersScreen> {
   final _userService = TokenUserService();
   List<TokenUser> _users = [];
+  List<TokenUser> _filtered = [];
   bool _isLoading = true;
+  String _search = '';
 
   @override
   void initState() {
@@ -29,8 +31,53 @@ class _TokenUsersScreenState extends State<TokenUsersScreen> {
     final users = await _userService.getTokenUsers();
     setState(() {
       _users = users;
+      _filtered = users;
       _isLoading = false;
     });
+  }
+
+  void _onSearch(String query) {
+    setState(() {
+      _search = query.trim().toLowerCase();
+      if (_search.isEmpty) {
+        _filtered = _users;
+      } else {
+        _filtered = _users.where((u) =>
+            u.name.toLowerCase().contains(_search) ||
+            u.phoneNumber.toLowerCase().contains(_search)).toList();
+      }
+    });
+  }
+
+  void _showSearchDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Search Users'),
+        content: TextField(
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Name or phone number',
+            prefixIcon: Icon(Icons.search),
+          ),
+          onChanged: _onSearch,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _onSearch('');
+              Navigator.pop(context);
+            },
+            child: const Text('Clear'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -58,7 +105,27 @@ class _TokenUsersScreenState extends State<TokenUsersScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  ..._users.map((user) => _buildUserCard(user)),
+                  if (_filtered.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(Icons.people_outline, size: 64, color: Colors.grey.shade300),
+                            const SizedBox(height: 12),
+                            Text(
+                              _users.isEmpty
+                                  ? 'No customers yet\nCustomers appear after they order from you'
+                                  : 'No match for "$_search"',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.grey.shade500),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    ..._filtered.map((user) => _buildUserCard(user)),
                 ],
               ),
             ),
@@ -90,7 +157,11 @@ class _TokenUsersScreenState extends State<TokenUsersScreen> {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
-              IconButton(onPressed: () {}, icon: const Icon(Icons.search)),
+              IconButton(
+                onPressed: _showSearchDialog,
+                icon: const Icon(Icons.search),
+                tooltip: 'Search users',
+              ),
             ],
           ),
         ),

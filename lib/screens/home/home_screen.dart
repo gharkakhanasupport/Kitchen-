@@ -9,6 +9,7 @@ import '../../services/profile_service.dart';
 import '../../services/order_service.dart';
 import '../../services/menu_service.dart';
 import '../../services/earnings_service.dart';
+import '../../services/fcm_service.dart';
 import '../../models/cook.dart';
 
 /// Home Screen
@@ -60,6 +61,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Auto-cleanup: delete daily menus older than 3 days
       await _menuService.cleanupOldDailyMenus();
+
+      // Register FCM token for push notifications (fire-and-forget)
+      FCMService().registerTokenWithSupabase(_cook!.id);
     }
 
     setState(() {

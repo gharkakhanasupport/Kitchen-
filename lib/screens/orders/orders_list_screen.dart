@@ -1,13 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../models/order.dart';
 import '../../services/order_service.dart';
 import '../../services/profile_service.dart';
 import '../../utils/constants.dart';
 import '../../models/subscriber.dart';
 import '../../services/subscriber_service.dart';
+import '../../widgets/otp_entry_dialog.dart';
+import '../../utils/maps_launcher.dart';
 import 'order_confirmation_screen.dart';
 import 'order_history_screen.dart';
-import 'order_ready_confirmation_screen.dart';
 import '../subscribers/subscriber_details_screen.dart';
 
 /// Orders List Screen
@@ -31,19 +34,19 @@ class _OrdersListScreenState extends State<OrdersListScreen>
   MealStatus? _selectedMealStatus;
   bool _isLoading = true;
   bool _isOnline = true;
-
-  // Hardcoded cook ID for demo purposes
-  final String _cookId = 'cook_123';
+  String? _cookId;
+  StreamSubscription? _orderStreamSub;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
     _loadOrders();
   }
 
   @override
   void dispose() {
+    _orderStreamSub?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -55,8 +58,19 @@ class _OrdersListScreenState extends State<OrdersListScreen>
 
     final cook = await _profileService.getCurrentProfile();
     if (cook != null) {
+      _cookId = cook.id;
       final orders = await _orderService.getOrders(cook.id);
-      final subscribers = await _subscriberService.getSubscribers(_cookId);
+      final subscribers = await _subscriberService.getSubscribers(cook.id);
+
+      // Listen to real-time order updates
+      _orderStreamSub?.cancel();
+      _orderStreamSub = _orderService.orderUpdates.listen((updatedOrders) {
+        if (mounted) {
+          setState(() {
+            _allOrders = updatedOrders;
+          });
+        }
+      });
 
       setState(() {
         _allOrders = orders;
@@ -69,6 +83,235 @@ class _OrdersListScreenState extends State<OrdersListScreen>
         _isLoading = false;
       });
     }
+  }
+
+  /// Pull-to-refresh handler — forces fresh fetch from DB
+  Future<void> _refreshOrders() async {
+    if (_cookId == null) return;
+    final orders = await _orderService.getOrders(_cookId!, forceRefresh: true);
+    final subscribers = await _subscriberService.getSubscribers(_cookId!);
+    if (mounted) {
+      setState(() {
+        _allOrders = orders;
+        _subscribers = subscribers;
+      });
+    }
+  }
+
+  /// Show customer contact info (call button handler)
+  /// Prompt cook for 4-digit OTP shown on delivery partner's phone.
+  /// Validates via Supabase RPC verify_pickup_otp; on success advances order
+  /// to picked_up and refreshes list.
+  Future<void> _verifyPickupOtp(Order order) async {
+    final entered = await OtpEntryDialog.show(
+      context,
+      title: 'Verify pickup OTP',
+      subtitle:
+          'Ask the delivery partner for the 4-digit pickup code shown on their phone.',
+    );
+    if (entered == null) return;
+
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'verify_pickup_otp',
+        params: {'p_order_id': order.id, 'p_otp': entered},
+      );
+
+      final ok = (result is Map && result['ok'] == true);
+      final errorCode = (result is Map ? result['error']?.toString() : null) ?? '';
+
+      if (!mounted) return;
+
+      if (ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('✅ Pickup confirmed')),
+        );
+        if (_cookId != null) {
+          _orderService.clearCache();
+          final orders = await _orderService.getOrders(_cookId!);
+          if (mounted) {
+            setState(() => _allOrders = orders);
+            _tabController.animateTo(4);
+          }
+        }
+      } else {
+        final msg = switch (errorCode) {
+          'otp_mismatch' => 'Wrong OTP. Ask partner to re-read.',
+          'no_otp_set' => 'No OTP generated yet for this order.',
+          'already_picked_up' => 'Order already marked picked up.',
+          'invalid_format' => 'OTP must be 4 digits.',
+          _ => 'Verification failed ($errorCode)',
+        };
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Network error: $e')),
+      );
+    }
+  }
+
+  Future<void> _cancelOrder(Order order) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel Order?'),
+        content: Text(
+          'Cancel order #${order.id.length > 8 ? order.id.substring(0, 8) : order.id}? '
+          'Customer will be refunded if paid via wallet.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Cancel Order'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final res = await OrderService().cancelOrder(order.id);
+    if (!mounted) return;
+    final ok = res['ok'] == true;
+    final refunded = res['refunded'] == true;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? (refunded ? 'Order cancelled. Wallet refunded.' : 'Order cancelled.')
+          : 'Failed to cancel: ${res['error'] ?? 'unknown'}'),
+      backgroundColor: ok ? Colors.green : Colors.red,
+    ));
+  }
+
+  Future<void> _deleteOrder(Order order) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Order?'),
+        content: const Text('This permanently removes the order from your list.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final ok = await OrderService().deleteOrder(order.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok ? 'Order deleted.' : 'Failed to delete order.'),
+      backgroundColor: ok ? Colors.green : Colors.red,
+    ));
+  }
+
+  void _showCustomerContact(Order order) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+                  child: Icon(Icons.person, color: AppColors.primary),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        order.customerName,
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        'Order #${order.id.length > 8 ? order.id.substring(0, 8) : order.id}',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F4F6),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.phone, color: Color(0xFF6B7280)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      order.customerPhone.isEmpty ? 'No phone number' : order.customerPhone,
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                    label: const Text('Close'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: order.customerPhone.isEmpty
+                        ? null
+                        : () async {
+                            Navigator.pop(context);
+                            final ok = await MapsLauncher.call(order.customerPhone);
+                            if (!ok && mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Could not open dialer')),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.call),
+                    label: const Text('Call'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   List<Subscriber> get _filteredSubscribers {
@@ -84,12 +327,24 @@ class _OrdersListScreenState extends State<OrdersListScreen>
     return _allOrders.where((o) => o.status == OrderStatus.pending).toList();
   }
 
+  List<Order> get _activeOrders {
+    return _allOrders.where((o) =>
+        o.status == OrderStatus.accepted || o.status == OrderStatus.preparing).toList();
+  }
+
   List<Order> get _readyOrders {
-    return _allOrders.where((o) => o.status == OrderStatus.ready).toList();
+    return _allOrders.where((o) =>
+        o.status == OrderStatus.ready ||
+        o.status == OrderStatus.outForDelivery).toList();
   }
 
   List<Order> get _doneOrders {
-    return _allOrders.where((o) => o.status == OrderStatus.completed).toList();
+    return _allOrders.where((o) =>
+        o.status == OrderStatus.completed || o.status == OrderStatus.delivered).toList();
+  }
+
+  List<Order> get _rejectedOrders {
+    return _allOrders.where((o) => o.status == OrderStatus.rejected).toList();
   }
 
   Future<void> _toggleOnlineStatus() async {
@@ -117,12 +372,36 @@ class _OrdersListScreenState extends State<OrdersListScreen>
         ),
         centerTitle: true,
         leading: IconButton(
-          icon: const Icon(Icons.menu, color: Color(0xFF111814)),
-          onPressed: () {},
+          icon: const Icon(Icons.refresh, color: Color(0xFF111814)),
+          tooltip: 'Refresh orders',
+          onPressed: _refreshOrders,
         ),
         actions: [
           TextButton(
-            onPressed: () {},
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (_) => AlertDialog(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  title: const Text('Orders Help'),
+                  content: const Text(
+                    'Tabs:\n\n'
+                    '• Subscribers — your meal subscribers\n'
+                    '• New — pending orders waiting for your acceptance\n'
+                    '• Active — accepted and preparing orders\n'
+                    '• Ready — orders ready for pickup/delivery\n'
+                    '• Done — completed orders\n\n'
+                    'Pull down on any list to refresh.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Got it'),
+                    ),
+                  ],
+                ),
+              );
+            },
             child: Text(
               'Help',
               style: TextStyle(
@@ -147,16 +426,12 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
               ),
+              isScrollable: true,
               tabs: [
+                const Tab(text: 'Subscribers'),
                 Tab(
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [Text('Subscribers')],
-                  ),
-                ),
-                Tab(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text('New'),
                       if (_newOrders.isNotEmpty) ...[
@@ -183,8 +458,38 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                     ],
                   ),
                 ),
+                Tab(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Active'),
+                      if (_activeOrders.isNotEmpty) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.orange,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            '${_activeOrders.length}',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
                 const Tab(text: 'Ready'),
                 const Tab(text: 'Done'),
+                const Tab(text: 'Rejected'),
               ],
             ),
           ),
@@ -254,8 +559,10 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                     children: [
                       _buildSubscribersList(),
                       _buildOrdersList(_newOrders, 'New'),
+                      _buildOrdersList(_activeOrders, 'Preparing'),
                       _buildOrdersList(_readyOrders, 'Ready'),
                       _buildOrdersList(_doneOrders, 'Done'),
+                      _buildOrdersList(_rejectedOrders, 'Rejected'),
                     ],
                   ),
                 ),
@@ -270,24 +577,42 @@ class _OrdersListScreenState extends State<OrdersListScreen>
     }
 
     if (orders.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+      return RefreshIndicator(
+        color: AppColors.primary,
+        onRefresh: _refreshOrders,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Icon(
-              Icons.soup_kitchen,
-              size: 64,
-              color: const Color(0xFF618971).withValues(alpha: 0.4),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              type == 'Ready'
-                  ? 'No orders ready for pickup'
-                  : 'You\'re all caught up for now!',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: const Color(0xFF618971).withValues(alpha: 0.4),
+            SizedBox(height: MediaQuery.of(context).size.height * 0.25),
+            Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.soup_kitchen,
+                    size: 64,
+                    color: const Color(0xFF618971).withValues(alpha: 0.4),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    type == 'Ready'
+                        ? 'No orders ready for pickup'
+                        : 'You\'re all caught up for now!',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: const Color(0xFF618971).withValues(alpha: 0.4),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Pull down to refresh',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: const Color(0xFF618971).withValues(alpha: 0.4),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -317,7 +642,11 @@ class _OrdersListScreenState extends State<OrdersListScreen>
 
         // Orders list
         Expanded(
-          child: ListView.builder(
+          child: RefreshIndicator(
+            color: AppColors.primary,
+            onRefresh: _refreshOrders,
+            child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             itemCount: orders.length + (type != 'Ready' ? 1 : 0),
             itemBuilder: (context, index) {
@@ -363,6 +692,7 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                   ? _buildReadyOrderCard(order)
                   : _buildCompletedOrderCard(order);
             },
+          ),
           ),
         ),
       ],
@@ -449,7 +779,7 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                       ),
                       child: Center(
                         child: Text(
-                          order.customerName[0],
+                          order.customerName.isNotEmpty ? order.customerName[0].toUpperCase() : '?',
                           style: const TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -628,11 +958,11 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          'Preparing',
+                          order.status == OrderStatus.accepted ? 'Accepted' : 'Preparing',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: AppColors.primary,
+                            color: order.status == OrderStatus.accepted ? Colors.blue : AppColors.primary,
                           ),
                         ),
                       ),
@@ -640,6 +970,41 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (order.status == OrderStatus.accepted)
+                  Container(
+                    height: 48,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        await _orderService.updateOrderStatus(
+                          order.id,
+                          OrderStatus.preparing,
+                        );
+                        if (_cookId != null) {
+                          _orderService.clearCache();
+                          final orders = await _orderService.getOrders(_cookId!);
+                          if (mounted) setState(() => _allOrders = orders);
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Icon(Icons.restaurant, color: Colors.white, size: 20),
+                          SizedBox(width: 8),
+                          Text('Start Preparing', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
+                        ],
+                      ),
+                    ),
+                  ),
                 Container(
                   height: 48,
                   decoration: BoxDecoration(
@@ -661,7 +1026,14 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                         order.id,
                         OrderStatus.ready,
                       );
-                      _loadOrders();
+                      if (_cookId != null) {
+                        _orderService.clearCache();
+                        final orders = await _orderService.getOrders(_cookId!);
+                        if (mounted) {
+                          setState(() => _allOrders = orders);
+                          _tabController.animateTo(3); // Move to Ready tab
+                        }
+                      }
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.transparent,
@@ -989,11 +1361,16 @@ class _OrdersListScreenState extends State<OrdersListScreen>
 
                         // Accept the order
                         await _orderService.acceptOrder(order.id);
-                        await _loadOrders();
+                        // Refresh from DB to ensure latest state
+                        if (_cookId != null) {
+                          _orderService.clearCache();
+                          final orders = await _orderService.getOrders(_cookId!);
+                          if (mounted) setState(() => _allOrders = orders);
+                        }
 
-                        // Switch to Ready tab if user clicked "Go to Orders Queue"
-                        if (result == true && mounted) {
-                          _tabController.animateTo(2); // Index 2 is Ready tab
+                        // Switch to Active tab after accepting
+                        if (mounted) {
+                          _tabController.animateTo(2); // Index 2 is Active tab
                         }
                       },
                       icon: const Icon(
@@ -1143,7 +1520,8 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                             size: 20,
                             color: Color(0xFF6B7280),
                           ),
-                          onPressed: () {},
+                          tooltip: 'Call customer',
+                          onPressed: () => _showCustomerContact(order),
                         ),
                       ),
                     ],
@@ -1253,72 +1631,98 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                 ),
                 const SizedBox(height: 16),
 
-                // Confirm Pickup Button
-                Container(
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: AppColors.secondary,
-                    borderRadius: BorderRadius.circular(8),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.secondary.withValues(alpha: 0.2),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
+                // Verify Pickup OTP button (only when status=ready) OR
+                // "Out for Delivery" chip (when partner already picked up).
+                if (order.status == OrderStatus.outForDelivery)
+                  Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF618971).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: const Color(0xFF618971).withValues(alpha: 0.4),
                       ),
-                    ],
-                  ),
-                  child: TextButton.icon(
-                    onPressed: () async {
-                      // Navigate to confirmation screen
-                      await Navigator.push(
-                        context,
-                        PageRouteBuilder(
-                          pageBuilder:
-                              (context, animation, secondaryAnimation) =>
-                                  OrderReadyConfirmationScreen(
-                                    orderId: order.id,
-                                  ),
-                          transitionsBuilder:
-                              (context, animation, secondaryAnimation, child) {
-                                return FadeTransition(
-                                  opacity: animation,
-                                  child: child,
-                                );
-                              },
-                          transitionDuration: const Duration(milliseconds: 300),
-                        ),
-                      );
-
-                      // Update order status after confirmation screen
-                      await _orderService.updateOrderStatus(
-                        order.id,
-                        OrderStatus.completed,
-                      );
-                      _loadOrders();
-                    },
-                    icon: const Icon(
-                      Icons.check,
-                      size: 18,
-                      color: Colors.white,
                     ),
-                    label: const Text(
-                      'Confirm Pickup',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
+                    alignment: Alignment.center,
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.delivery_dining, color: Color(0xFF618971), size: 18),
+                        SizedBox(width: 8),
+                        Text(
+                          'Out for Delivery',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF618971),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppColors.secondary,
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.secondary.withValues(alpha: 0.2),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: TextButton.icon(
+                      onPressed: () => _verifyPickupOtp(order),
+                      icon: const Icon(
+                        Icons.lock_open,
+                        size: 18,
                         color: Colors.white,
                       ),
-                    ),
-                    style: TextButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                      label: const Text(
+                        'Verify Pickup OTP',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      style: TextButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ),
-                ),
               ],
             ),
           ),
+          const SizedBox(height: 8),
+          if (order.status != OrderStatus.outForDelivery)
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _cancelOrder(order),
+                    icon: Icon(Icons.cancel, color: Colors.red.shade700, size: 18),
+                    label: Text('Cancel Order',
+                      style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Colors.red.shade300),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Delete',
+                  icon: Icon(Icons.delete_outline, color: Colors.grey.shade700),
+                  onPressed: () => _deleteOrder(order),
+                ),
+              ],
+            ),
         ],
       ),
     );
@@ -1351,7 +1755,7 @@ class _OrdersListScreenState extends State<OrdersListScreen>
             ),
             child: Center(
               child: Text(
-                order.customerName[0],
+                order.customerName.isNotEmpty ? order.customerName[0].toUpperCase() : '?',
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -1383,7 +1787,20 @@ class _OrdersListScreenState extends State<OrdersListScreen>
               ],
             ),
           ),
-          Icon(Icons.check_circle, color: AppColors.primary, size: 24),
+          Icon(
+            order.status == OrderStatus.rejected
+                ? Icons.cancel
+                : Icons.check_circle,
+            color: order.status == OrderStatus.rejected
+                ? Colors.red
+                : AppColors.primary,
+            size: 24,
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            icon: Icon(Icons.delete_outline, color: Colors.grey.shade600, size: 20),
+            onPressed: () => _deleteOrder(order),
+          ),
         ],
       ),
     );

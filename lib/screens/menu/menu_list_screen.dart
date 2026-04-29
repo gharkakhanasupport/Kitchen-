@@ -627,9 +627,9 @@ class _MenuListScreenState extends State<MenuListScreen> {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: item.imageUrl != null && item.imageUrl!.isNotEmpty
+                  child: item.displayImage != null && item.displayImage!.isNotEmpty
                       ? Image.network(
-                          item.imageUrl!,
+                          item.displayImage!,
                           fit: BoxFit.cover,
                           errorBuilder: (context, error, stackTrace) {
                             return Center(

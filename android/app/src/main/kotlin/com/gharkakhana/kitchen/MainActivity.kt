@@ -1,4 +1,4 @@
-package com.gharkakhana.ghar_ka_khana
+package com.gharkakhana.kitchen
 
 import io.flutter.embedding.android.FlutterActivity
 

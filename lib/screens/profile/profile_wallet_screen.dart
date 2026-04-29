@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../utils/constants.dart';
+import '../../services/profile_service.dart';
+import '../../services/wallet_service.dart';
 
 /// Simple Wallet Screen
 /// Shows wallet balance, recent transactions, and withdrawal option
@@ -11,45 +13,74 @@ class ProfileWalletScreen extends StatefulWidget {
 }
 
 class _ProfileWalletScreenState extends State<ProfileWalletScreen> {
-  // Demo data
-  final double _balance = 12450.50;
-  final List<Map<String, dynamic>> _transactions = [
-    {
-      'id': 'TXN001',
-      'type': 'credit',
-      'amount': 450.0,
-      'description': 'Order #1234 - Butter Chicken',
-      'date': '2 hours ago',
-    },
-    {
-      'id': 'TXN002',
-      'type': 'credit',
-      'amount': 320.0,
-      'description': 'Order #1233 - Dal Tadka',
-      'date': '5 hours ago',
-    },
-    {
-      'id': 'TXN003',
-      'type': 'debit',
-      'amount': 5000.0,
-      'description': 'Withdrawal to Bank',
-      'date': 'Yesterday',
-    },
-    {
-      'id': 'TXN004',
-      'type': 'credit',
-      'amount': 680.0,
-      'description': 'Order #1232 - Chicken Biryani',
-      'date': 'Yesterday',
-    },
-    {
-      'id': 'TXN005',
-      'type': 'credit',
-      'amount': 250.0,
-      'description': 'Order #1231 - Poha',
-      'date': '2 days ago',
-    },
-  ];
+  final _profileService = ProfileService();
+  final _walletService = KitchenWalletService();
+
+  double _balance = 0.0;
+  List<Map<String, dynamic>> _transactions = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWallet();
+  }
+
+  Future<void> _loadWallet() async {
+    setState(() => _isLoading = true);
+    final cook = await _profileService.getCurrentProfile();
+    if (cook == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
+    final balance = await _walletService.getBalance(cook.id);
+    final transactions = await _walletService.getTransactions(cook.id);
+    if (!mounted) return;
+    setState(() {
+      _balance = balance;
+      _transactions = transactions;
+      _isLoading = false;
+    });
+  }
+
+  double _thisMonthEarnings() {
+    final now = DateTime.now();
+    double sum = 0.0;
+    for (final txn in _transactions) {
+      final type = (txn['type'] ?? '').toString();
+      if (type != 'credit' && type != 'earning') continue;
+      final dt = DateTime.tryParse(txn['created_at']?.toString() ?? '');
+      if (dt == null) continue;
+      if (dt.year == now.year && dt.month == now.month) {
+        sum += (txn['amount'] ?? 0).toDouble();
+      }
+    }
+    return sum;
+  }
+
+  String _lastWithdrawalLabel() {
+    for (final txn in _transactions) {
+      final type = (txn['type'] ?? '').toString();
+      if (type == 'debit' || type == 'withdrawal') {
+        final dt = DateTime.tryParse(txn['created_at']?.toString() ?? '');
+        if (dt != null) return _formatRelativeTime(dt.toIso8601String());
+      }
+    }
+    return 'None yet';
+  }
+
+  String _formatRelativeTime(String? isoDate) {
+    if (isoDate == null) return '';
+    final dt = DateTime.tryParse(isoDate);
+    if (dt == null) return '';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dt.day}/${dt.month}/${dt.year}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,30 +89,55 @@ class _ProfileWalletScreenState extends State<ProfileWalletScreen> {
       body: Column(
         children: [
           _buildHeader(),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildBalanceCard(),
-                  const SizedBox(height: 24),
-                  _buildWithdrawButton(),
-                  const SizedBox(height: 32),
-                  const Text(
-                    'Recent Transactions',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
+          if (_isLoading)
+            const Expanded(child: Center(child: CircularProgressIndicator()))
+          else
+            Expanded(
+              child: RefreshIndicator(
+                color: AppColors.primary,
+                onRefresh: _loadWallet,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildBalanceCard(),
+                      const SizedBox(height: 24),
+                      _buildWithdrawButton(),
+                      const SizedBox(height: 32),
+                      const Text(
+                        'Recent Transactions',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      if (_transactions.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.all(32),
+                          child: Center(
+                            child: Column(
+                              children: [
+                                Icon(Icons.receipt_long, size: 56, color: Colors.grey.shade300),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'No transactions yet',
+                                  style: TextStyle(color: Colors.grey.shade500, fontSize: 14),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        ..._transactions.map((txn) => _buildTransactionCard(txn)),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  ..._transactions.map((txn) => _buildTransactionCard(txn)),
-                ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -110,7 +166,11 @@ class _ProfileWalletScreenState extends State<ProfileWalletScreen> {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
-              IconButton(onPressed: () {}, icon: const Icon(Icons.history)),
+              IconButton(
+                onPressed: _loadWallet,
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh',
+              ),
             ],
           ),
         ),
@@ -212,14 +272,14 @@ class _ProfileWalletScreenState extends State<ProfileWalletScreen> {
               _buildBalanceInfo(
                 Icons.trending_up,
                 'This Month',
-                '₹8,450',
+                '₹${_thisMonthEarnings().toStringAsFixed(0)}',
                 Colors.white70,
               ),
               const SizedBox(width: 24),
               _buildBalanceInfo(
                 Icons.calendar_today,
                 'Last Withdrawal',
-                '2 days ago',
+                _lastWithdrawalLabel(),
                 Colors.white70,
               ),
             ],
@@ -284,7 +344,9 @@ class _ProfileWalletScreenState extends State<ProfileWalletScreen> {
   }
 
   Widget _buildTransactionCard(Map<String, dynamic> txn) {
-    final isCredit = txn['type'] == 'credit';
+    final type = (txn['type'] ?? 'credit').toString();
+    final isCredit = type == 'credit' || type == 'earning';
+    final amount = (txn['amount'] ?? 0).toDouble();
     final color = isCredit ? AppColors.secondary : Colors.red;
 
     return Container(
@@ -322,7 +384,7 @@ class _ProfileWalletScreenState extends State<ProfileWalletScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  txn['description'],
+                  (txn['description'] ?? txn['note'] ?? 'Transaction').toString(),
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
@@ -330,40 +392,19 @@ class _ProfileWalletScreenState extends State<ProfileWalletScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Text(
-                      txn['id'],
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      width: 4,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade400,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      txn['date'],
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
+                Text(
+                  _formatRelativeTime(txn['created_at']?.toString()),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                  ),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 12),
           Text(
-            '${isCredit ? '+' : '-'}₹${txn['amount'].toStringAsFixed(2)}',
+            '${isCredit ? '+' : '-'}₹${amount.toStringAsFixed(2)}',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,

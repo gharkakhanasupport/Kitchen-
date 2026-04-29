@@ -4,6 +4,8 @@ enum OrderStatus {
   accepted,
   preparing,
   ready,
+  outForDelivery,
+  delivered,
   completed,
   rejected,
 }
@@ -46,10 +48,24 @@ class OrderItem {
   double get totalPrice => price * quantity;
 }
 
-/// Parse OrderStatus from string
+/// Convert OrderStatus to DB string (snake_case)
+String orderStatusToDbString(OrderStatus status) {
+  switch (status) {
+    case OrderStatus.outForDelivery:
+      return 'out_for_delivery';
+    default:
+      return status.name;
+  }
+}
+
+/// Parse OrderStatus from DB string (accepts both snake_case and camelCase)
 OrderStatus orderStatusFromString(String status) {
+  final normalized = status.toLowerCase().trim();
+  if (normalized == 'out_for_delivery' || normalized == 'outfordelivery') {
+    return OrderStatus.outForDelivery;
+  }
   return OrderStatus.values.firstWhere(
-    (e) => e.name == status,
+    (e) => e.name.toLowerCase() == normalized,
     orElse: () => OrderStatus.pending,
   );
 }
@@ -134,7 +150,7 @@ class Order {
       'delivery_address': deliveryAddress,
       'items': items.map((item) => item.toMap()).toList(),
       'total_amount': totalAmount,
-      'status': status.name,
+      'status': orderStatusToDbString(status),
       'accepted_at': acceptedAt?.toIso8601String(),
       'completed_at': completedAt?.toIso8601String(),
     };
@@ -190,6 +206,10 @@ class Order {
         return 'Preparing';
       case OrderStatus.ready:
         return 'Ready';
+      case OrderStatus.outForDelivery:
+        return 'Out for Delivery';
+      case OrderStatus.delivered:
+        return 'Delivered';
       case OrderStatus.completed:
         return 'Completed';
       case OrderStatus.rejected:

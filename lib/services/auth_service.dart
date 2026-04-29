@@ -24,16 +24,21 @@ class AuthService {
   // Mock OTP for testing (in real app, this would come from backend)
   String _generatedOtp = '';
 
-  /// Check if user is logged in
+  /// Check if user is logged in.
+  /// Returns true if saved cook data exists AND rememberMe was opted in.
+  /// If rememberMe is false, session is per-launch only (cleared on manual logout).
   Future<bool> isLoggedIn() async {
     final prefs = await SharedPreferences.getInstance();
-    final rememberMe = prefs.getBool('remember_me') ?? false;
+    final cookEmail = prefs.getString('cook_email');
+    final cookData = prefs.getString('cook_data');
+    if (cookEmail == null || cookData == null) return false;
 
-    // If rememberMe is false, we don't auto-login even if data exists
+    // rememberMe default true — persist unless user explicitly opted out
+    final rememberMe = prefs.getBool('remember_me') ?? true;
     if (!rememberMe) return false;
 
     _currentPhone = prefs.getString('phone_number');
-    return _currentPhone != null;
+    return true;
   }
 
   /// Validate phone number format

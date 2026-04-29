@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/order.dart';
 import '../../services/order_service.dart';
 import '../../services/profile_service.dart';
+import 'order_details_screen.dart';
 
 /// Order History Screen
 /// Shows completed orders with stats and filters - Earthy, handwritten design
@@ -57,6 +58,45 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen>
   void dispose() {
     _backgroundAnimationController.dispose();
     super.dispose();
+  }
+
+  void _showFilterSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        final options = ['All', 'Completed', 'Delivered', 'Cancelled', 'Rejected'];
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Filter Orders',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: textLight),
+                ),
+                const SizedBox(height: 16),
+                ...options.map((opt) => ListTile(
+                      title: Text(opt),
+                      trailing: _selectedFilter == opt
+                          ? const Icon(Icons.check_circle, color: primaryColor)
+                          : null,
+                      onTap: () {
+                        setState(() => _selectedFilter = opt);
+                        Navigator.pop(ctx);
+                      },
+                    )),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _loadOrders() async {
@@ -210,7 +250,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen>
                                 Icons.filter_list,
                                 color: textLight,
                               ),
-                              onPressed: () {},
+                              onPressed: _showFilterSheet,
                             ),
                           ],
                         ),
@@ -454,7 +494,12 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen>
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
           onTap: () {
-            // Navigate to order details
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => OrderDetailsScreen(orderId: order.id),
+              ),
+            );
           },
           child: Padding(
             padding: const EdgeInsets.all(20),

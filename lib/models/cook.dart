@@ -33,8 +33,8 @@ class Cook {
     this.kitchenPhotos = const [],
     required this.createdAt,
     this.rating = 4.8,
-    this.totalOrders = 150,
-    this.earnings = 1240,
+    this.totalOrders = 0,
+    this.earnings = 0,
   });
 
   /// Create a Cook object from a Map (useful for JSON parsing)
@@ -56,8 +56,8 @@ class Cook {
         map['createdAt'] ?? map['created_at'] ?? DateTime.now().toIso8601String(),
       ),
       rating: (map['rating'] ?? 4.8).toDouble(),
-      totalOrders: map['totalOrders'] ?? 150,
-      earnings: map['earnings'] ?? 1240,
+      totalOrders: map['totalOrders'] ?? 0,
+      earnings: map['earnings'] ?? 0,
     );
   }
 

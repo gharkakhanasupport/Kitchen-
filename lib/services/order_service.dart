@@ -2,17 +2,28 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/order.dart';
 import '../utils/supabase_config.dart';
-import 'sync_service.dart';
+import 'wallet_service.dart';
 
 /// Order Service
-/// Manages orders with Supabase persistence and dual-write sync.
+/// Manages orders with Supabase persistence.
 /// Listens for incoming orders from User App via Supabase Realtime.
+///
+/// ## Sync Architecture (Phase 6 — deduplicated)
+/// - Kitchen DB is the PRIMARY source for this app.
+/// - Order status updates are written ONLY to Kitchen DB.
+/// - The Edge Function `gkk-kitchen-sync` (deployed on User DB Supabase)
+///   listens for Kitchen DB webhook triggers and syncs status, driver_id,
+///   estimated_delivery_time, and kitchen_notes back to User DB.
+/// - This eliminates the previous double-write race condition where both
+///   client-side `SyncService.dualUpdate()` AND server-side Edge Functions
+///   wrote the same status to User DB simultaneously.
+/// - `SyncService` is still used for non-order tables (kitchens, menu_items,
+///   daily_menus, subscribers) where no Edge Function exists.
 class OrderService {
   static final OrderService _instance = OrderService._internal();
   factory OrderService() => _instance;
   OrderService._internal();
 
-  final SyncService _sync = SyncService();
   static const String _table = 'orders';
 
   // Cache for orders
@@ -24,10 +35,17 @@ class OrderService {
 
   // Supabase realtime subscription
   StreamSubscription? _realtimeSubscription;
+  int _reconnectAttempts = 0;
+  static const int _maxReconnectAttempts = 5;
+  String? _activeCookId;
 
-  /// Start listening for real-time order updates from both DBs.
+  /// Start listening for real-time order updates from Kitchen DB.
   /// Call this once during app initialization.
   void startRealtimeListener(String cookId) {
+    // Cancel any existing subscription first (e.g., on re-login)
+    _realtimeSubscription?.cancel();
+    _activeCookId = cookId;
+
     // Listen to Kitchen DB for incoming orders (written by User App)
     final stream = SupabaseConfig.client
         .from(_table)
@@ -35,16 +53,41 @@ class OrderService {
         .eq('cook_id', cookId)
         .order('created_at', ascending: false);
 
-    _realtimeSubscription = stream.listen((data) {
-      _orders = data.map((row) => Order.fromMap(row)).toList();
-      _orderUpdateController.add(_orders!);
+    _realtimeSubscription = stream.listen(
+      (data) {
+        _orders = data.map((row) => Order.fromMap(row)).toList();
+        _orderUpdateController.add(_orders!);
+        _reconnectAttempts = 0; // reset on successful data
+        debugPrint('OrderService: realtime got ${_orders!.length} orders');
+      },
+      onError: (error) {
+        debugPrint('OrderService: realtime stream error: $error');
+        _reconnectWithBackoff();
+      },
+      cancelOnError: false,
+    );
+  }
+
+  /// Reconnect with exponential backoff (capped at max attempts).
+  void _reconnectWithBackoff() {
+    if (_reconnectAttempts >= _maxReconnectAttempts) {
+      debugPrint('OrderService: max reconnect attempts reached, giving up');
+      return;
+    }
+    _reconnectAttempts++;
+    final delay = Duration(seconds: (1 << _reconnectAttempts).clamp(2, 60));
+    Future.delayed(delay, () {
+      if (_activeCookId != null) {
+        debugPrint('OrderService: reconnecting attempt $_reconnectAttempts...');
+        startRealtimeListener(_activeCookId!);
+      }
     });
   }
 
-  /// Get all orders for current cook
-  Future<List<Order>> getOrders(String cookId) async {
-    if (_orders != null) return _orders!;
-
+  /// Get all orders for current cook.
+  /// Always fetches fresh data from the DB (cache is only used as a fallback on error).
+  /// The cache is kept up-to-date by the realtime listener.
+  Future<List<Order>> getOrders(String cookId, {bool forceRefresh = false}) async {
     try {
       final data = await SupabaseConfig.client
           .from(_table)
@@ -53,11 +96,12 @@ class OrderService {
           .order('created_at', ascending: false);
 
       _orders = data.map((row) => Order.fromMap(row)).toList();
+      _orderUpdateController.add(_orders!);
       return _orders!;
     } catch (e) {
       debugPrint('OrderService.getOrders error: $e');
-      _orders = [];
-      return _orders!;
+      // Fallback to cache only if we have it; otherwise return empty list
+      return _orders ?? [];
     }
   }
 
@@ -93,15 +137,19 @@ class OrderService {
     return await getOrdersByStatus(cookId, OrderStatus.completed);
   }
 
-  /// Accept an order (synced to both DBs)
+  /// Accept an order.
+  /// Writes to Kitchen DB only — Edge Function `gkk-kitchen-sync` syncs to User DB.
   Future<bool> acceptOrder(String orderId) async {
     try {
       final updateData = {
-        'status': OrderStatus.accepted.name,
+        'status': orderStatusToDbString(OrderStatus.accepted),
         'accepted_at': DateTime.now().toIso8601String(),
       };
 
-      await _sync.dualUpdate(_table, updateData, orderId);
+      await SupabaseConfig.client
+          .from(_table)
+          .update(updateData)
+          .eq('id', orderId);
       await _refreshLocalCache(orderId, updateData);
       return true;
     } catch (e) {
@@ -110,12 +158,16 @@ class OrderService {
     }
   }
 
-  /// Reject an order (synced to both DBs)
+  /// Reject an order.
+  /// Writes to Kitchen DB only — Edge Function `gkk-kitchen-sync` syncs to User DB.
   Future<bool> rejectOrder(String orderId) async {
     try {
-      final updateData = {'status': OrderStatus.rejected.name};
+      final updateData = {'status': orderStatusToDbString(OrderStatus.rejected)};
 
-      await _sync.dualUpdate(_table, updateData, orderId);
+      await SupabaseConfig.client
+          .from(_table)
+          .update(updateData)
+          .eq('id', orderId);
       await _refreshLocalCache(orderId, updateData);
       return true;
     } catch (e) {
@@ -124,16 +176,33 @@ class OrderService {
     }
   }
 
-  /// Update order status (synced to both DBs)
+  /// Update order status.
+  /// Writes to Kitchen DB only — Edge Function `gkk-kitchen-sync` syncs to User DB.
   Future<bool> updateOrderStatus(String orderId, OrderStatus newStatus) async {
     try {
-      final updateData = <String, dynamic>{'status': newStatus.name};
-      if (newStatus == OrderStatus.completed) {
+      final updateData = <String, dynamic>{'status': orderStatusToDbString(newStatus)};
+      if (newStatus == OrderStatus.completed || newStatus == OrderStatus.delivered) {
         updateData['completed_at'] = DateTime.now().toIso8601String();
       }
 
-      await _sync.dualUpdate(_table, updateData, orderId);
+      await SupabaseConfig.client
+          .from(_table)
+          .update(updateData)
+          .eq('id', orderId);
       await _refreshLocalCache(orderId, updateData);
+
+      // Credit kitchen wallet when order is completed or delivered
+      if (newStatus == OrderStatus.completed || newStatus == OrderStatus.delivered) {
+        final order = await getOrderById(orderId);
+        if (order != null) {
+          await KitchenWalletService().creditEarning(
+            order.cookId,
+            order.totalAmount,
+            orderId,
+          );
+        }
+      }
+
       return true;
     } catch (e) {
       debugPrint('OrderService.updateOrderStatus error: $e');
@@ -170,10 +239,14 @@ class OrderService {
     }).length;
   }
 
-  /// Add a new order (incoming from User App or manually)
+  /// Add a new order (incoming from User App or manually).
+  /// Writes to Kitchen DB only — the order originally comes from User DB
+  /// via Edge Function or realtime sync.
   Future<void> addNewOrder(Order order) async {
     try {
-      await _sync.dualInsert(_table, order.toMap());
+      await SupabaseConfig.client
+          .from(_table)
+          .upsert(order.toMapWithId(), onConflict: 'id');
       // Cache will be updated by realtime listener
     } catch (e) {
       debugPrint('OrderService.addNewOrder error: $e');
@@ -208,6 +281,81 @@ class OrderService {
   /// Clear local cache
   void clearCache() {
     _orders = null;
+  }
+
+  /// Per-order delete — kitchen + user DB
+  Future<bool> deleteOrder(String orderId) async {
+    try {
+      await SupabaseConfig.client.from(_table).delete().eq('id', orderId);
+      try {
+        await SupabaseConfig.userDbClient.from('orders').delete().eq('id', orderId);
+      } catch (e) {
+        debugPrint('deleteOrder: User DB mirror delete failed: $e');
+      }
+      _orders?.removeWhere((o) => o.id == orderId);
+      if (_orders != null) _orderUpdateController.add(_orders!);
+      return true;
+    } catch (e) {
+      debugPrint('OrderService.deleteOrder error: $e');
+      return false;
+    }
+  }
+
+  /// Cancel order — calls cancel_order_full RPC (Kitchen DB) which
+  /// cross-PATCHes User + Delivery DBs and refunds wallet if applicable.
+  Future<Map<String, dynamic>> cancelOrder(String orderId) async {
+    try {
+      final result = await SupabaseConfig.client.rpc(
+        'cancel_order_full',
+        params: {'p_order_id': orderId},
+      );
+      if (result is Map && result['ok'] == true) {
+        // Local cache update — mark rejected
+        final idx = _orders?.indexWhere((o) => o.id == orderId) ?? -1;
+        if (idx != -1 && _orders != null) {
+          _orders![idx] = _orders![idx].copyWith(status: OrderStatus.rejected);
+          _orderUpdateController.add(_orders!);
+        }
+      }
+      return (result is Map ? Map<String, dynamic>.from(result) : {'ok': false});
+    } catch (e) {
+      debugPrint('OrderService.cancelOrder error: $e');
+      return {'ok': false, 'error': e.toString()};
+    }
+  }
+
+  /// DEV / BETA TOOL — wipe every order for this cook across Kitchen+User DBs.
+  /// Returns number of rows deleted in Kitchen DB.
+  Future<int> clearAllCookOrders(String cookId) async {
+    int total = 0;
+    try {
+      final del = await SupabaseConfig.client
+          .from(_table)
+          .delete()
+          .eq('cook_id', cookId)
+          .select('id');
+      final ids = (del as List).map((e) => e['id']).toList();
+      total = ids.length;
+
+      // Best-effort mirror delete in User DB
+      if (ids.isNotEmpty) {
+        try {
+          await SupabaseConfig.userDbClient
+              .from('orders')
+              .delete()
+              .inFilter('id', ids);
+        } catch (e) {
+          debugPrint('clearAllCookOrders: User DB mirror delete failed: $e');
+        }
+      }
+    } catch (e) {
+      debugPrint('clearAllCookOrders: $e');
+      rethrow;
+    }
+
+    _orders = null;
+    _orderUpdateController.add(<Order>[]);
+    return total;
   }
 
   /// Dispose resources

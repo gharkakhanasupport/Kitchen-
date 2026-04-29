@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/subscriber.dart';
 import '../../services/subscriber_service.dart';
+import '../../services/profile_service.dart';
 import '../../utils/constants.dart';
 import 'subscriber_card.dart';
 import 'subscriber_details_screen.dart';
@@ -17,6 +18,7 @@ class SubscribersScreen extends StatefulWidget {
 class _SubscribersScreenState extends State<SubscribersScreen>
     with SingleTickerProviderStateMixin {
   final _subscriberService = SubscriberService();
+  final _profileService = ProfileService();
   late TabController _tabController;
 
   List<Subscriber> _subscribers = [];
@@ -24,8 +26,7 @@ class _SubscribersScreenState extends State<SubscribersScreen>
   bool _isLoading = true;
   MealStatus? _selectedMealStatus; // Filter for meal status
 
-  // Hardcoded cook ID for demo purposes
-  final String _cookId = 'cook_123';
+  String? _cookId;
 
   @override
   void initState() {
@@ -54,8 +55,21 @@ class _SubscribersScreenState extends State<SubscribersScreen>
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
+    // Resolve current logged-in cook ID
+    final cook = await _profileService.getCurrentProfile();
+    _cookId = cook?.id;
+
+    if (_cookId == null) {
+      setState(() {
+        _subscribers = [];
+        _activeCount = 0;
+        _isLoading = false;
+      });
+      return;
+    }
+
     // Load active count
-    final count = await _subscriberService.getActiveSubscribersCount(_cookId);
+    final count = await _subscriberService.getActiveSubscribersCount(_cookId!);
 
     // Load subscribers based on current tab
     await _loadSubscribersByTab();
@@ -67,11 +81,12 @@ class _SubscribersScreenState extends State<SubscribersScreen>
   }
 
   Future<void> _loadSubscribersByTab() async {
+    if (_cookId == null) return;
     List<Subscriber> subscribers;
 
     switch (_tabController.index) {
       case 0: // Subscription - with meal status filter
-        subscribers = await _subscriberService.getSubscribers(_cookId);
+        subscribers = await _subscriberService.getSubscribers(_cookId!);
         // Filter by meal status if selected
         if (_selectedMealStatus != null) {
           subscribers = subscribers
@@ -81,24 +96,24 @@ class _SubscribersScreenState extends State<SubscribersScreen>
         break;
       case 1: // New
         subscribers = await _subscriberService.getSubscribersByStatus(
-          _cookId,
+          _cookId!,
           SubscriberStatus.new_,
         );
         break;
       case 2: // Ready
         subscribers = await _subscriberService.getSubscribersByStatus(
-          _cookId,
+          _cookId!,
           SubscriberStatus.ready,
         );
         break;
       case 3: // Done
         subscribers = await _subscriberService.getSubscribersByStatus(
-          _cookId,
+          _cookId!,
           SubscriberStatus.done,
         );
         break;
       default:
-        subscribers = await _subscriberService.getSubscribers(_cookId);
+        subscribers = await _subscriberService.getSubscribers(_cookId!);
     }
 
     setState(() => _subscribers = subscribers);

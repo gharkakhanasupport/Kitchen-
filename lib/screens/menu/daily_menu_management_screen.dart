@@ -477,9 +477,9 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          itemCount: 7,
+          itemCount: 3,
           itemBuilder: (context, index) {
-            final date = DateTime.now().add(Duration(days: index - 1));
+            final date = DateTime.now().add(Duration(days: index));
             final isSelected = _isSameDay(date, _selectedDate);
             final isToday = _isSameDay(date, DateTime.now());
 
@@ -610,21 +610,36 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
   Widget _buildMenuContent() {
     if (_currentMenu == null || _currentMenu!.items.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.restaurant_menu, size: 64, color: Colors.grey.shade300),
-            const SizedBox(height: 16),
-            Text(
-              'No menu items for this date',
-              style: TextStyle(fontSize: 16, color: Colors.grey.shade500, fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Tap "Add Dish" to get started',
-              style: TextStyle(fontSize: 14, color: Colors.grey),
-            ),
-          ],
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.restaurant_menu, size: 64, color: Colors.grey.shade300),
+              const SizedBox(height: 16),
+              Text(
+                'No menu items for this date',
+                style: TextStyle(fontSize: 16, color: Colors.grey.shade500, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Add dishes to start building your menu',
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+              const SizedBox(height: 32),
+
+              // Quick-add buttons for each category
+              _buildEmptyStateAddButton('Add Special', MealCategory.special, Icons.star_rounded, const Color(0xFFFF9800)),
+              const SizedBox(height: 12),
+              _buildEmptyStateAddButton('Add Breakfast', MealCategory.breakfast, Icons.free_breakfast, const Color(0xFF4CAF50)),
+              const SizedBox(height: 12),
+              _buildEmptyStateAddButton('Add Lunch', MealCategory.lunch, Icons.lunch_dining, const Color(0xFFE8722A)),
+              const SizedBox(height: 12),
+              _buildEmptyStateAddButton('Add Dinner', MealCategory.dinner, Icons.dinner_dining, const Color(0xFF6C3FA0)),
+              const SizedBox(height: 12),
+              _buildEmptyStateAddButton('Add Snack', MealCategory.snacks, Icons.cookie, const Color(0xFF00BCD4)),
+            ],
+          ),
         ),
       );
     }
@@ -690,6 +705,26 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyStateAddButton(String label, MealCategory category, IconData icon, Color color) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: () => _showAddDishBottomSheet(category),
+        icon: Icon(icon, color: color, size: 22),
+        label: Text(
+          label,
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: color),
+        ),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          side: BorderSide(color: color.withValues(alpha: 0.4)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          backgroundColor: color.withValues(alpha: 0.05),
+        ),
       ),
     );
   }
