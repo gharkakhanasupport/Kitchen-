@@ -35,6 +35,17 @@ class OrderService {
 
   // Supabase realtime subscription
   StreamSubscription? _realtimeSubscription;
+
+  /// Look up a customer's name from the local order cache (useful for reviews)
+  String getCustomerNameForOrder(String orderId) {
+    if (_orders == null) return 'Customer';
+    try {
+      final order = _orders!.firstWhere((o) => o.id == orderId);
+      return order.customerName.isNotEmpty ? order.customerName : 'Customer';
+    } catch (_) {
+      return 'Customer';
+    }
+  }
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 5;
   String? _activeCookId;

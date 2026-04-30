@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/profile_service.dart';
+import '../../services/order_service.dart';
 import '../../utils/constants.dart';
 
 /// Reads kitchen reviews from the reviews table in Kitchen DB.
@@ -14,6 +15,7 @@ class ReviewsScreen extends StatefulWidget {
 
 class _ReviewsScreenState extends State<ReviewsScreen> {
   final _profileService = ProfileService();
+  final _orderService = OrderService();
   final _db = Supabase.instance.client;
   String? _cookId;
   bool _loading = true;
@@ -139,6 +141,8 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
   Widget _buildReviewCard(Map<String, dynamic> r) {
     final rating = ((r['kitchen_rating'] ?? 0) as num).toInt();
     final comment = (r['kitchen_comment'] ?? '').toString();
+    final orderId = (r['order_id'] ?? '').toString();
+    final customerName = _orderService.getCustomerNameForOrder(orderId);
     final createdAt = DateTime.tryParse(r['created_at'] ?? '');
     String when = '';
     if (createdAt != null) {
@@ -162,20 +166,66 @@ class _ReviewsScreenState extends State<ReviewsScreen> {
         children: [
           Row(
             children: [
-              ...List.generate(5, (i) {
-                return Icon(
-                  i < rating ? Icons.star_rounded : Icons.star_outline_rounded,
-                  size: 18,
-                  color: Colors.amber,
-                );
-              }),
-              const Spacer(),
-              Text(when, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: Text(
+                    customerName.isNotEmpty ? customerName[0].toUpperCase() : 'C',
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      customerName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: Color(0xFF111814),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        ...List.generate(5, (i) {
+                          return Icon(
+                            i < rating ? Icons.star_rounded : Icons.star_outline_rounded,
+                            size: 14,
+                            color: Colors.amber,
+                          );
+                        }),
+                        const Spacer(),
+                        Text(when, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
           if (comment.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Text(comment, style: const TextStyle(fontSize: 14, height: 1.4)),
+            const SizedBox(height: 12),
+            Text(
+              comment,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.4,
+                color: const Color(0xFF111814).withValues(alpha: 0.8),
+              ),
+            ),
           ],
         ],
       ),

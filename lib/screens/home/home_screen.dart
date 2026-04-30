@@ -8,9 +8,9 @@ import '../users/token_users_screen.dart';
 import '../../services/profile_service.dart';
 import '../../services/order_service.dart';
 import '../../services/menu_service.dart';
-import '../../services/earnings_service.dart';
 import '../../services/fcm_service.dart';
 import '../../models/cook.dart';
+import '../../models/order.dart';
 
 /// Home Screen
 /// Main dashboard with bottom navigation
@@ -42,22 +42,18 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     _cook = await _profileService.getCurrentProfile();
-
     _cook ??= await _profileService.refreshProfile();
 
     if (_cook != null) {
-      // Load real data from Supabase (no more sample data)
+      // Pre-warm caches (1 DB call each — reused by dashboard tab)
       await _menuService.getMenuItems(_cook!.id);
       await _orderService.getOrders(_cook!.id);
 
       // Start real-time listener for incoming orders
       _orderService.startRealtimeListener(_cook!.id);
 
-      // Sync profile to kitchens table
-      await _profileService.refreshProfile();
-
-      // Auto-cleanup: delete daily menus older than 3 days
-      await _menuService.cleanupOldDailyMenus();
+      // Auto-cleanup: delete daily menus older than 3 days (fire-and-forget)
+      _menuService.cleanupOldDailyMenus();
 
       // Register FCM token for push notifications (fire-and-forget)
       FCMService().registerTokenWithSupabase(_cook!.id);
@@ -136,7 +132,6 @@ class _DashboardTab extends StatefulWidget {
 class _DashboardTabState extends State<_DashboardTab> {
   final _orderService = OrderService();
   final _menuService = MenuService();
-  final _earningsService = EarningsService();
   final _profileService = ProfileService();
 
   int _pendingOrdersCount = 0;
@@ -151,19 +146,39 @@ class _DashboardTabState extends State<_DashboardTab> {
     _loadDashboardData();
   }
 
+  /// Load dashboard stats.
+  /// ⚡ OPTIMIZED: Fetches orders ONCE (1 DB call) and derives
+  /// pending/active counts locally. Previously did 4 separate DB calls.
   Future<void> _loadDashboardData() async {
     if (widget.cook == null) return;
+    final cookId = widget.cook!.id;
 
-    final pendingOrders = await _orderService.getPendingOrders(widget.cook!.id);
-    final activeOrders = await _orderService.getActiveOrders(widget.cook!.id);
-    final menuItems = await _menuService.getMenuItems(widget.cook!.id);
-    final earnings = await _earningsService.getTodayEarnings(widget.cook!.id);
+    // ONE DB call for orders (cache will be warm from _initializeApp)
+    final allOrders = await _orderService.getOrders(cookId);
+    final menuItems = await _menuService.getMenuItems(cookId);
+
+    // Derive counts locally — no extra DB calls
+    final pending = allOrders.where((o) => o.status == OrderStatus.pending).length;
+    final active = allOrders.where((o) =>
+        o.status == OrderStatus.accepted ||
+        o.status == OrderStatus.preparing ||
+        o.status == OrderStatus.ready).length;
+
+    // Calculate today's earnings locally
+    final today = DateTime.now();
+    final todayRevenue = allOrders
+        .where((o) =>
+            (o.status == OrderStatus.completed || o.status == OrderStatus.delivered) &&
+            o.createdAt.year == today.year &&
+            o.createdAt.month == today.month &&
+            o.createdAt.day == today.day)
+        .fold<double>(0, (sum, o) => sum + o.totalAmount);
 
     setState(() {
-      _pendingOrdersCount = pendingOrders.length;
-      _activeOrdersCount = activeOrders.length;
+      _pendingOrdersCount = pending;
+      _activeOrdersCount = active;
       _menuItemsCount = menuItems.length;
-      _todayEarnings = earnings.totalRevenue;
+      _todayEarnings = todayRevenue;
       _isOnline = widget.cook?.isAvailable ?? true;
     });
   }
