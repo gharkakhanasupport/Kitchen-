@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -614,7 +613,7 @@ class _ViewProfileScreenState extends State<ViewProfileScreen> {
                       height: 24,
                       child: Switch(
                         value: _cook!.isVegetarian,
-                        activeColor: Colors.green,
+                        activeThumbColor: Colors.green,
                         onChanged: _isLoading ? null : (value) => _toggleVegetarian(value),
                       ),
                     ),

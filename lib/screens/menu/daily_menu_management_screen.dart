@@ -341,7 +341,7 @@ class _DailyMenuManagementScreenState extends State<DailyMenuManagementScreen> {
                             // Upload local images
                             for (var img in selectedImages) {
                               final timestamp = DateTime.now().millisecondsSinceEpoch;
-                              final path = '$_cookId/daily/dish_${timestamp}.jpg';
+                              final path = '$_cookId/daily/dish_$timestamp.jpg';
                               final bytes = await img.readAsBytes();
                               await SupabaseConfig.client.storage.from('kitchen-photos').uploadBinary(path, bytes);
                               imageUrls.add(SupabaseConfig.client.storage.from('kitchen-photos').getPublicUrl(path));

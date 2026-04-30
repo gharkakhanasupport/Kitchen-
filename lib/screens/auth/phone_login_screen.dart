@@ -105,6 +105,65 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
     }
   }
 
+  void _showForgotPasswordDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1a1510),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Forgot Password?',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Your account is managed by the GKK Kitchen Administration.',
+              style: TextStyle(color: Color(0xFFa39d8e), fontSize: 14),
+            ),
+            SizedBox(height: 12),
+            Text(
+              'Please contact your supervisor or GKK Support to reset your password.',
+              style: TextStyle(color: Color(0xFFa39d8e), fontSize: 14),
+            ),
+            SizedBox(height: 16),
+            Row(
+              children: [
+                Icon(Icons.email_outlined, color: AppColors.primary, size: 16),
+                SizedBox(width: 8),
+                Text(
+                  'support@gharkakhana.com',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'OK',
+              style: TextStyle(
+                color: AppColors.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final backgroundColor = const Color(0xFF211c11); // Dark theme background
@@ -436,9 +495,7 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
                       ],
                     ),
                     TextButton(
-                      onPressed: () {
-                        // TODO: Implement forgot password
-                      },
+                      onPressed: _showForgotPasswordDialog,
                       child: Text(
                         'Forgot Password?',
                         style: TextStyle(

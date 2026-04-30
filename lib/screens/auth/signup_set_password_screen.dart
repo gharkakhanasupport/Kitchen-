@@ -289,7 +289,7 @@ class _SignUpSetPasswordScreenState extends State<SignUpSetPasswordScreen>
                   margin: const EdgeInsets.fromLTRB(24, 16, 24, 0),
                   height: 4,
                   decoration: BoxDecoration(
-                    color: borderColor.withOpacity(0.3),
+                    color: borderColor.withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(2),
                   ),
                   child: FractionallySizedBox(

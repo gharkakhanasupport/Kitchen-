@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'utils/constants.dart';
 import 'utils/firebase_options.dart';
-import 'utils/supabase_config.dart';
 import 'services/auth_service.dart';
 import 'services/daily_menu_service.dart';
 import 'services/fcm_service.dart';

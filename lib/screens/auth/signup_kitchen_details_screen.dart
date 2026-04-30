@@ -32,7 +32,7 @@ class _SignUpKitchenDetailsScreenState extends State<SignUpKitchenDetailsScreen>
   bool _isVegetarian = true;
   bool _termsAccepted = false;
   final List<File> _kitchenPhotos = [];
-  bool _isSubmitting = false;
+  final bool _isSubmitting = false;
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -610,11 +610,11 @@ class _SignUpKitchenDetailsScreenState extends State<SignUpKitchenDetailsScreen>
                                     color: borderColor,
                                     width: 2,
                                   ),
-                                  fillColor: MaterialStateProperty.resolveWith((
+                                  fillColor: WidgetStateProperty.resolveWith((
                                     states,
                                   ) {
                                     if (states.contains(
-                                      MaterialState.selected,
+                                      WidgetState.selected,
                                     )) {
                                       return const Color(0xFFc1921a);
                                     }

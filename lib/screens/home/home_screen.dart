@@ -43,10 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _cook = await _profileService.getCurrentProfile();
 
-    if (_cook == null) {
-      // Try refreshing from Supabase instead of loading sample data
-      _cook = await _profileService.refreshProfile();
-    }
+    _cook ??= await _profileService.refreshProfile();
 
     if (_cook != null) {
       // Load real data from Supabase (no more sample data)

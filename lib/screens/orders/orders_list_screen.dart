@@ -1352,7 +1352,7 @@ class _OrdersListScreenState extends State<OrdersListScreen>
                     child: TextButton.icon(
                       onPressed: () async {
                         // Show confirmation screen first
-                        final result = await Navigator.of(context).push(
+                        await Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (context) =>
                                 OrderConfirmationScreen(order: order),

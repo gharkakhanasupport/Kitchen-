@@ -32,8 +32,7 @@ class _AddMenuItemScreenState extends State<AddMenuItemScreen> {
   String _selectedCategory = 'Lunch';
   bool _isLoading = false;
   int _quantity = 1;
-  List<File> _selectedImages = [];
-  String? _uploadedImageUrl;
+  final List<File> _selectedImages = [];
 
   @override
   void dispose() {

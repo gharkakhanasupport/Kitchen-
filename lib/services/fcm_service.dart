@@ -24,7 +24,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
   const initSettings = InitializationSettings(android: androidSettings);
-  await _bgLocalNotifications.initialize(initSettings);
+  await _bgLocalNotifications.initialize(settings: initSettings);
 
   const androidChannel = AndroidNotificationChannel(
     'gkk_kitchen_orders',
@@ -56,10 +56,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   final notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
   await _bgLocalNotifications.show(
-    notificationId,
-    data['title']?.toString() ?? 'Kitchen',
-    data['body']?.toString() ?? '',
-    const NotificationDetails(android: androidDetails),
+    id: notificationId,
+    title: data['title']?.toString() ?? 'Kitchen',
+    body: data['body']?.toString() ?? '',
+    notificationDetails: const NotificationDetails(android: androidDetails),
   );
 
   debugPrint('✅ Kitchen BG notification shown');
@@ -138,7 +138,7 @@ class FCMService {
     );
 
     await _localNotifications.initialize(
-      initSettings,
+      settings: initSettings,
       onDidReceiveNotificationResponse: (response) {
         debugPrint('📲 Kitchen notif tap: ${response.payload}');
       },
@@ -201,10 +201,10 @@ class FCMService {
     );
 
     await _localNotifications.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title,
-      body,
-      details,
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: details,
       payload: payload,
     );
   }

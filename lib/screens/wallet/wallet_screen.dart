@@ -4,7 +4,6 @@ import '../../services/earnings_service.dart';
 import '../../services/profile_service.dart';
 import '../../services/wallet_service.dart';
 import '../../utils/constants.dart';
-import '../../models/earnings.dart';
 
 /// Wallet Screen
 /// Displays wallet balance with History and Withdraw tabs
@@ -24,7 +23,6 @@ class _WalletScreenState extends State<WalletScreen>
   late TabController _tabController;
   String _selectedPeriod = 'Today';
   String? _cookId;
-  DailyEarnings? _earnings;
   int _periodOrders = 0;
   double _periodRevenue = 0.0;
   double _walletBalance = 0.0;
@@ -76,7 +74,6 @@ class _WalletScreenState extends State<WalletScreen>
     switch (_selectedPeriod) {
       case 'Today':
         final earnings = await _earningsService.getTodayEarnings(cookId);
-        _earnings = earnings;
         _periodOrders = earnings.totalOrders;
         _periodRevenue = earnings.totalRevenue;
         break;

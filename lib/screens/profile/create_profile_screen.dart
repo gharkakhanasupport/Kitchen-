@@ -595,7 +595,7 @@ class _CreateProfileScreenState extends State<CreateProfileScreen> {
                               ),
                               Switch(
                                 value: _isVegetarian,
-                                activeColor: Colors.green,
+                                activeThumbColor: Colors.green,
                                 onChanged: (value) {
                                   setState(() {
                                     _isVegetarian = value;
