@@ -239,33 +239,34 @@ class FCMService {
           ? 'ios'
           : 'web';
 
-      await Supabase.instance.client.rpc(
-        'register_fcm_token_for_user',
-        params: {
-          'p_user_id': cookId,
-          'p_device_token': token,
-          'p_user_type': 'kitchen',
-          'p_platform': platform,
-        },
-      );
-      debugPrint('✅ Kitchen FCM token registered for $cookId');
+      final actualUserId = Supabase.instance.client.auth.currentUser?.id ?? cookId;
+      if (actualUserId.isNotEmpty) {
+        await Supabase.instance.client.rpc(
+          'register_unified_fcm_token',
+          params: {
+            'p_user_id': actualUserId,
+            'p_device_token': token,
+            'p_platform': platform,
+          },
+        );
+        debugPrint('✅ Kitchen FCM token registered for $actualUserId');
 
-      _messaging.onTokenRefresh.listen((newToken) async {
-        try {
-          await Supabase.instance.client.rpc(
-            'register_fcm_token_for_user',
-            params: {
-              'p_user_id': cookId,
-              'p_device_token': newToken,
-              'p_user_type': 'kitchen',
-              'p_platform': platform,
-            },
-          );
-          debugPrint('✅ Kitchen FCM token refreshed');
-        } catch (e) {
-          debugPrint('⚠️ Kitchen FCM refresh failed: $e');
-        }
-      });
+        _messaging.onTokenRefresh.listen((newToken) async {
+          try {
+            await Supabase.instance.client.rpc(
+              'register_unified_fcm_token',
+              params: {
+                'p_user_id': actualUserId,
+                'p_device_token': newToken,
+                'p_platform': platform,
+              },
+            );
+            debugPrint('✅ Kitchen FCM token refreshed');
+          } catch (e) {
+            debugPrint('⚠️ Kitchen FCM refresh failed: $e');
+          }
+        });
+      }
     } catch (e) {
       debugPrint('⚠️ Kitchen FCM register failed: $e');
     }
